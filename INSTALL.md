@@ -1,6 +1,6 @@
 # Install
 
-This guide walks through a full local setup for building, flashing, and monitoring the Poofer firmware.
+This guide walks through a full local setup for building, flashing, provisioning, and monitoring the `Poofer_v2` firmware.
 
 ## Prerequisites
 
@@ -10,6 +10,9 @@ This guide walks through a full local setup for building, flashing, and monitori
 - USB-C data cable
 - The ESP32-C3 Super Mini board
 - A 12V supply for the solenoid driver PCB
+- An existing dedicated Wi-Fi network for the poofer system to join
+
+`Poofer_v2` does not use a self-hosted control AP as its primary deployment model. Bring an external Wi-Fi AP/router and put the browser plus both poofer nodes on that same network.
 
 Optional but recommended development tools:
 
@@ -44,7 +47,7 @@ You can also set local defaults by copying `.env.example` to `.env` and editing 
 ## Project Setup
 
 ```bash
-cd /path/to/esp32c3supermini_3xWiSeFire1.1_fw
+cd /path/to/Poofer_v2
 ```
 
 Optional but recommended: install git hooks for local linting.
@@ -72,11 +75,15 @@ python3 scripts/build.py
 python3 scripts/flash.py --port /dev/cu.usbmodemXXXX
 ```
 
+Flash each poofer node separately.
+
 ## Monitor
 
 ```bash
 python3 scripts/monitor.py --port /dev/cu.usbmodemXXXX
 ```
+
+Monitor each node separately while provisioning or debugging.
 
 ## Lint
 
@@ -91,8 +98,15 @@ Notes:
 
 ## Wi-Fi And UI
 
-- AP SSID: `Poofer-AP`
-- AP password: `FlameoHotMan`
-- Wi-Fi setup page: `http://192.168.4.1/wifi`
-- Control UI: `http://192.168.4.1/`
-- mDNS after STA join: `http://poofer.local/`
+`Poofer_v2` expects an existing external network.
+
+Deployment model:
+
+- Put the browser control device on a dedicated Wi-Fi network.
+- Put the `stage-left` and `stage-right` poofer nodes on that same network.
+- Discover the nodes over `mDNS`.
+- Use `Poofer ID Setup` to assign or verify roles.
+
+There is no requirement in v2 that a poofer node host the operator network.
+
+The old AP-hosted single-node flow should be treated as transitional legacy behavior while the multi-node design is being implemented.

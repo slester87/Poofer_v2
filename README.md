@@ -58,6 +58,7 @@ Condensed steps:
 
 - Install ESP-IDF 5.5.x and ensure `idf.py` is on your PATH.
 - Optional: copy `.env.example` to `.env` to set defaults like `POOFER_SERIAL_PORT`.
+- Have an existing dedicated Wi-Fi network ready before node setup. `Poofer_v2` does not host its own control AP.
 - Build firmware for each poofer node: `python3 scripts/build.py`
 - Flash each node: `python3 scripts/flash.py --port /dev/cu.usbmodemXXXX`
 - Provision both nodes onto the same dedicated external Wi-Fi network
