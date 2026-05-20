@@ -1,7 +1,7 @@
 # Poofer_v2
 
 ![Poofer live fire](Assets/Images/blurred_poof.jpg)
-![Poofer mushroom poof](Assets/Images/mushroom_poof.png)
+![Poofer mushroom poof](Assets/Images/mushroom_poof.jpeg)
 
 ![CI](https://github.com/slester87/esp32c3supermini_3xWiSeFire1.1_fw/actions/workflows/ci.yml/badge.svg?branch=main)
 
