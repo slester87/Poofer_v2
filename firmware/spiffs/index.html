@@ -3,120 +3,887 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Poofer Control</title>
+  <title>Poofer_v2 Control</title>
   <style>
     :root {
-      --bg: #0b0f14;
-      --panel: #111823;
-      --accent: #ff8a00;
-      --ready: #1db954;
-      --error: #e63946;
-      --text: #f0f4f8;
-      --muted: #7a8aa0;
-      --gauge-bg: #1c2533;
-      --gauge-fill: #3fb950;
-      --btn-up: #202a38;
-      --btn-down: #2e3b4d;
+      --bg-0: #120700;
+      --bg-1: #28120a;
+      --bg-2: #090c12;
+      --panel: rgba(18, 22, 30, 0.9);
+      --panel-edge: rgba(255, 255, 255, 0.08);
+      --text: #f6ecde;
+      --muted: #bcae9f;
+      --safe: #1db954;
+      --fire: #ff8a00;
+      --fault: #e63946;
+      --down: #0000ff;
+      --neutral: #7a8aa0;
+      --gauge-bg: rgba(255, 255, 255, 0.08);
+      --shadow: 0 28px 80px rgba(0, 0, 0, 0.45);
+      --glass: blur(14px);
+      --radius-lg: 26px;
+      --radius-md: 18px;
+      --radius-sm: 12px;
+      --button-font: "Avenir Next Condensed", "Franklin Gothic Medium", "Arial Narrow", sans-serif;
+      --body-font: "Trebuchet MS", "Segoe UI", Arial, sans-serif;
     }
+
     * { box-sizing: border-box; }
+
     body {
-      margin: 0; padding: 0; background: radial-gradient(circle at 20% 20%, #172133, #0b0f14 55%);
-      color: var(--text); font-family: "Trebuchet MS", "Segoe UI", Arial, sans-serif; display: flex; justify-content: center;
-      min-height: 100vh; align-items: center;
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      font-family: var(--body-font);
+      background:
+        radial-gradient(circle at 15% 15%, rgba(255, 125, 25, 0.2), transparent 24%),
+        radial-gradient(circle at 80% 0%, rgba(255, 210, 120, 0.12), transparent 30%),
+        linear-gradient(180deg, var(--bg-1), var(--bg-2) 52%, #05070b 100%);
+      display: flex;
+      justify-content: center;
+      padding: 28px 16px 32px;
     }
-    .wrap {
-      width: min(540px, 92vw);
-      background: linear-gradient(160deg, #141d2a, #0f151f);
-      border: 1px solid #1f2a3a; border-radius: 16px; padding: 20px;
-      box-shadow: 0 24px 60px rgba(0,0,0,0.45);
+
+    .shell {
+      width: min(1040px, 100%);
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
     }
-    h1 { margin: 0 0 6px; font-size: 22px; letter-spacing: 0.5px; }
-    .sub { color: var(--muted); font-size: 13px; margin-bottom: 18px; }
-    .status {
-      display: flex; align-items: center; gap: 10px; font-size: 14px; margin-bottom: 16px;
+
+    .hero,
+    .surface {
+      background: linear-gradient(180deg, rgba(28, 34, 46, 0.95), rgba(12, 16, 24, 0.94));
+      border: 1px solid var(--panel-edge);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow);
+      backdrop-filter: var(--glass);
+      -webkit-backdrop-filter: var(--glass);
     }
-    .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
-    .row { display: flex; gap: 16px; align-items: stretch; }
-    .gauge {
-      width: 64px; background: var(--gauge-bg); border-radius: 10px; padding: 6px; display: flex; align-items: flex-end;
-      border: 1px solid #243246;
+
+    .hero {
+      overflow: hidden;
+      position: relative;
     }
+
+    .hero::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(circle at 18% 18%, rgba(255, 157, 57, 0.2), transparent 20%),
+        linear-gradient(135deg, rgba(255, 138, 0, 0.08), transparent 35%);
+      pointer-events: none;
+    }
+
+    .hero-inner {
+      position: relative;
+      padding: 22px 22px 18px;
+      display: grid;
+      gap: 18px;
+    }
+
+    .hero-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: start;
+    }
+
+    .eyebrow {
+      font-size: 12px;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: #ffd29b;
+      margin-bottom: 8px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(28px, 4vw, 42px);
+      line-height: 0.95;
+      letter-spacing: 0.03em;
+      font-family: var(--button-font);
+      text-transform: uppercase;
+    }
+
+    .lead {
+      margin: 10px 0 0;
+      max-width: 62ch;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .mode-pill {
+      min-width: 174px;
+      padding: 14px 16px;
+      border-radius: 16px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    .mode-label {
+      font-size: 11px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: #ffcf8d;
+      margin-bottom: 6px;
+    }
+
+    .mode-value {
+      font-size: 22px;
+      font-family: var(--button-font);
+      text-transform: uppercase;
+    }
+
+    .mode-help {
+      margin-top: 4px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .toolbar {
+      display: grid;
+      grid-template-columns: 1.2fr 1fr auto;
+      gap: 14px;
+      align-items: center;
+    }
+
+    .status-card,
+    .arm-card,
+    .setup-card {
+      border-radius: var(--radius-md);
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      padding: 14px 16px;
+    }
+
+    .status-line {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 15px;
+      margin-bottom: 6px;
+    }
+
+    .status-dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      background: var(--neutral);
+      box-shadow: 0 0 12px rgba(255, 255, 255, 0.22);
+    }
+
+    .status-subline {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .arm-card {
+      display: flex;
+      gap: 14px;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .arm-copy strong,
+    .setup-copy strong {
+      display: block;
+      font-size: 13px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+
+    .arm-copy span,
+    .setup-copy span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .arm-toggle {
+      position: relative;
+      width: 88px;
+      height: 44px;
+      flex: 0 0 auto;
+    }
+
+    .arm-toggle input {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+    }
+
+    .arm-slider {
+      position: absolute;
+      inset: 0;
+      border-radius: 999px;
+      background: rgba(122, 138, 160, 0.35);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      transition: background 0.18s ease;
+    }
+
+    .arm-slider::after {
+      content: "";
+      position: absolute;
+      top: 4px;
+      left: 4px;
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: #fff3df;
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.32);
+      transition: transform 0.18s ease;
+    }
+
+    .arm-toggle input:checked + .arm-slider {
+      background: rgba(29, 185, 84, 0.48);
+    }
+
+    .arm-toggle input:checked + .arm-slider::after {
+      transform: translateX(44px);
+    }
+
+    .setup-button {
+      appearance: none;
+      border: 0;
+      background: linear-gradient(180deg, rgba(255, 175, 72, 0.25), rgba(255, 112, 0, 0.18));
+      color: var(--text);
+      border-radius: 16px;
+      padding: 14px 18px;
+      font: inherit;
+      font-family: var(--button-font);
+      font-size: 18px;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      cursor: pointer;
+      border: 1px solid rgba(255, 194, 111, 0.28);
+      box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.18);
+    }
+
+    .surface {
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 2fr 1fr;
+      gap: 16px;
+      align-items: stretch;
+    }
+
+    .lane {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .lane-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 8px;
+      padding: 0 2px;
+    }
+
+    .lane-title {
+      font-family: var(--button-font);
+      font-size: 22px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .lane-tag {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+    }
+
+    .fire-button {
+      appearance: none;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.03)),
+        radial-gradient(circle at 50% 15%, rgba(255, 195, 116, 0.12), transparent 40%),
+        rgba(18, 22, 32, 0.96);
+      color: var(--text);
+      border-radius: 22px;
+      min-height: 280px;
+      padding: 18px;
+      cursor: pointer;
+      display: grid;
+      align-content: space-between;
+      position: relative;
+      overflow: hidden;
+      transition: transform 0.12s ease, border-color 0.16s ease, filter 0.16s ease, opacity 0.16s ease;
+      box-shadow: inset 0 -22px 40px rgba(0, 0, 0, 0.28);
+    }
+
+    .fire-button::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), transparent 22%, transparent 78%, rgba(255, 255, 255, 0.06));
+      pointer-events: none;
+    }
+
+    .fire-button:active {
+      transform: translateY(1px) scale(0.997);
+    }
+
+    .fire-button[disabled] {
+      cursor: not-allowed;
+    }
+
+    .fire-button.muted {
+      filter: saturate(0.55) blur(0.35px);
+      opacity: 0.72;
+    }
+
+    .fire-button.active {
+      border-color: rgba(255, 192, 84, 0.5);
+      box-shadow: inset 0 -30px 56px rgba(0, 0, 0, 0.28), 0 0 0 1px rgba(255, 174, 70, 0.16);
+    }
+
+    .button-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: start;
+      gap: 10px;
+    }
+
+    .button-name {
+      font-family: var(--button-font);
+      font-size: clamp(28px, 4vw, 46px);
+      line-height: 0.9;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      text-align: left;
+    }
+
+    .button-state {
+      min-width: 84px;
+      text-align: right;
+      font-size: 12px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: rgba(255, 255, 255, 0.82);
+    }
+
+    .button-center {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: rgba(255, 245, 228, 0.88);
+    }
+
+    .gauge-stack {
+      display: flex;
+      gap: 12px;
+      align-items: end;
+      justify-content: space-between;
+    }
+
+    .gauge-wrap {
+      height: 132px;
+      width: 40px;
+      padding: 5px;
+      border-radius: 16px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: var(--gauge-bg);
+      display: flex;
+      align-items: end;
+      flex: 0 0 auto;
+    }
+
     .gauge-fill {
-      width: 100%; border-radius: 6px; height: 100%; background: linear-gradient(180deg, #59d185, var(--gauge-fill));
+      width: 100%;
+      height: 100%;
+      border-radius: 12px;
+      background: linear-gradient(180deg, rgba(255, 233, 180, 0.95), rgba(255, 138, 0, 0.85) 68%, rgba(229, 57, 70, 0.82));
       transition: height 0.08s linear;
+      box-shadow: inset 0 -8px 14px rgba(0, 0, 0, 0.18);
     }
-    .control {
-      flex: 1; display: flex; flex-direction: column; gap: 12px;
+
+    .button-meta {
+      display: grid;
+      gap: 5px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      font-size: 12px;
+      color: #f2ddbe;
     }
-    .btn {
-      user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
-      -webkit-tap-highlight-color: transparent; touch-action: manipulation; cursor: pointer;
-      background: var(--btn-up); border: 1px solid #2c3b52; border-radius: 14px; padding: 26px 18px;
-      text-align: center; font-size: 22px; font-weight: 700; letter-spacing: 1px;
-      box-shadow: inset 0 0 18px rgba(0,0,0,0.4);
+
+    .button-meta strong {
+      display: block;
+      font-family: var(--button-font);
+      font-size: 26px;
+      letter-spacing: 0.04em;
+      color: #fff8ee;
     }
-    .btn.active { background: var(--btn-down); color: #fff; box-shadow: inset 0 0 24px rgba(0,0,0,0.6); }
-    .meta { font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; }
-    .meta span { font-variant-numeric: tabular-nums; }
-    .footer { margin-top: 12px; font-size: 12px; color: var(--muted); }
-    a { color: #7fb7ff; text-decoration: none; }
+
+    .button-meta span {
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+
+    .button-foot {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      font-size: 12px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+    }
+
+    .button-foot strong {
+      color: #fff2dc;
+      font-weight: 600;
+    }
+
+    .setup-banner {
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 16px;
+      border-radius: 18px;
+      border: 1px solid rgba(230, 57, 70, 0.28);
+      background: linear-gradient(180deg, rgba(230, 57, 70, 0.16), rgba(230, 57, 70, 0.08));
+      color: #ffe8d8;
+    }
+
+    .setup-banner strong {
+      display: block;
+      font-size: 13px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+
+    .setup-banner span {
+      display: block;
+      font-size: 13px;
+      color: #ffd3bf;
+    }
+
+    .setup-banner.live {
+      display: flex;
+    }
+
+    .footer {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 0 4px;
+    }
+
+    a { color: #ffd39b; text-decoration: none; }
+
+    @media (max-width: 860px) {
+      .toolbar,
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .fire-button {
+        min-height: 220px;
+      }
+
+      .hero-top {
+        flex-direction: column;
+      }
+
+      .mode-pill {
+        min-width: 0;
+      }
+    }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <h1>Poofer Control</h1>
-    <div class="sub">Press and hold to fire. 0.25s min, 3s max.</div>
+  <div class="shell">
+    <section class="hero">
+      <div class="hero-inner">
+        <div class="hero-top">
+          <div>
+            <div class="eyebrow">Poofer_v2 Live Console</div>
+            <h1>Stage Left. Both. Stage Right.</h1>
+            <p class="lead">
+              Hold-driven fire control for a two-node show. In this first front-end pass the live layout,
+              color semantics, armed gate, and setup mode are wired through the SPIFFS UI while the backend
+              still exposes the original single-node status model.
+            </p>
+          </div>
+          <div class="mode-pill">
+            <div class="mode-label">Console Mode</div>
+            <div class="mode-value" id="modeValue">Control</div>
+            <div class="mode-help" id="modeHelp">Direct fire controls available when armed.</div>
+          </div>
+        </div>
 
-    <div class="status">
-      <div class="dot" id="statusDot"></div>
-      <div id="statusText">Connecting...</div>
-    </div>
+        <div class="toolbar">
+          <div class="status-card">
+            <div class="status-line">
+              <div class="status-dot" id="statusDot"></div>
+              <div id="statusText">Connecting to local node…</div>
+            </div>
+            <div class="status-subline" id="statusSubtext">
+              Current firmware still reports one node. The left lane is hydrated from live backend state; right stays placeholder-disconnected until the multi-node protocol lands.
+            </div>
+          </div>
 
-    <div class="row">
-      <div class="gauge">
-        <div class="gauge-fill" id="gaugeFill"></div>
-      </div>
-      <div class="control">
-        <div class="btn" id="fireBtn">FIRE</div>
-        <div class="meta">
-          <span>Held: <span id="heldMs">0</span> ms</span>
-          <span>Last: <span id="lastMs">250</span> ms</span>
+          <div class="arm-card">
+            <div class="arm-copy">
+              <strong id="armedLabel">Disarmed</strong>
+              <span id="armedHelp">Outgoing poof commands are blocked.</span>
+            </div>
+            <label class="arm-toggle" aria-label="Armed">
+              <input id="armedToggle" type="checkbox" />
+              <span class="arm-slider"></span>
+            </label>
+          </div>
+
+          <div class="setup-card">
+            <div class="setup-copy">
+              <strong>Poofer ID Setup</strong>
+              <span>Role assignment, conflict handling, and forced-disarm mode.</span>
+            </div>
+            <button class="setup-button" id="setupBtn" type="button">Setup</button>
+          </div>
         </div>
       </div>
-    </div>
+    </section>
 
-    <div class="footer">
-      Wi-Fi setup: <a href="/wifi">/wifi</a> | If the UI feels stuck, release and reconnect.
-    </div>
+    <section class="surface">
+      <div class="setup-banner" id="setupBanner">
+        <div>
+          <strong>Setup Mode Active</strong>
+          <span>Armed is forced false and all firing controls are disabled until you leave setup mode.</span>
+        </div>
+        <button class="setup-button" id="exitSetupBtn" type="button">Return To Control</button>
+      </div>
+
+      <div class="grid">
+        <div class="lane">
+          <div class="lane-header">
+            <div class="lane-title">Stage Left</div>
+            <div class="lane-tag" id="leftTag">Live Node</div>
+          </div>
+          <button class="fire-button" id="leftBtn" type="button">
+            <div class="button-top">
+              <div class="button-name">Left</div>
+              <div class="button-state" id="leftState">Connecting</div>
+            </div>
+            <div class="button-center">Hold To Fire</div>
+            <div class="gauge-stack">
+              <div class="gauge-wrap">
+                <div class="gauge-fill" id="leftGauge"></div>
+              </div>
+              <div class="button-meta">
+                <span>Held</span>
+                <strong id="leftHeld">0 ms</strong>
+                <span>Last Held</span>
+                <strong id="leftLast">250 ms</strong>
+              </div>
+            </div>
+            <div class="button-foot">
+              <div>Status <strong id="leftFoot">Waiting</strong></div>
+              <div>Node 01</div>
+            </div>
+          </button>
+        </div>
+
+        <div class="lane">
+          <div class="lane-header">
+            <div class="lane-title">Both</div>
+            <div class="lane-tag" id="bothTag">Best Effort</div>
+          </div>
+          <button class="fire-button" id="bothBtn" type="button">
+            <div class="button-top">
+              <div class="button-name">Both</div>
+              <div class="button-state" id="bothState">Partial</div>
+            </div>
+            <div class="button-center">Fan Out To Left + Right</div>
+            <div class="gauge-stack">
+              <div class="gauge-wrap">
+                <div class="gauge-fill" id="bothGauge"></div>
+              </div>
+              <div class="button-meta">
+                <span>Skew Goal</span>
+                <strong>&lt;100 ms</strong>
+                <span>Execution</span>
+                <strong id="bothFootline">Best Effort</strong>
+              </div>
+            </div>
+            <div class="button-foot">
+              <div>Target <strong>Stage Left + Stage Right</strong></div>
+              <div id="bothFoot">1 / 2 Live</div>
+            </div>
+          </button>
+        </div>
+
+        <div class="lane">
+          <div class="lane-header">
+            <div class="lane-title">Stage Right</div>
+            <div class="lane-tag" id="rightTag">Placeholder</div>
+          </div>
+          <button class="fire-button" id="rightBtn" type="button">
+            <div class="button-top">
+              <div class="button-name">Right</div>
+              <div class="button-state" id="rightState">Disconnected</div>
+            </div>
+            <div class="button-center">Awaiting Multi-Node Backend</div>
+            <div class="gauge-stack">
+              <div class="gauge-wrap">
+                <div class="gauge-fill" id="rightGauge"></div>
+              </div>
+              <div class="button-meta">
+                <span>Held</span>
+                <strong id="rightHeld">0 ms</strong>
+                <span>Last Held</span>
+                <strong id="rightLast">0 ms</strong>
+              </div>
+            </div>
+            <div class="button-foot">
+              <div>Status <strong id="rightFoot">Disconnected</strong></div>
+              <div>Node 02</div>
+            </div>
+          </button>
+        </div>
+      </div>
+
+      <div class="footer">
+        <div>Wi-Fi setup: <a href="/wifi">/wifi</a></div>
+        <div>Current compatibility mode: local websocket still uses the original singleton `DOWN` / `UP` / `PING` backend.</div>
+      </div>
+    </section>
   </div>
 
 <script>
 (() => {
-  const fireBtn = document.getElementById('fireBtn');
-  const gaugeFill = document.getElementById('gaugeFill');
+  const MAX_MS = 3000;
+  const MIN_MS = 250;
+
+  const COLORS = {
+    green: '#1db954',
+    blue: '#0000ff',
+    red: '#e63946',
+    orange: '#ff8a00',
+    neutral: '#7a8aa0'
+  };
+
   const statusDot = document.getElementById('statusDot');
   const statusText = document.getElementById('statusText');
-  const heldMsEl = document.getElementById('heldMs');
-  const lastMsEl = document.getElementById('lastMs');
+  const statusSubtext = document.getElementById('statusSubtext');
+  const modeValue = document.getElementById('modeValue');
+  const modeHelp = document.getElementById('modeHelp');
+  const armedToggle = document.getElementById('armedToggle');
+  const armedLabel = document.getElementById('armedLabel');
+  const armedHelp = document.getElementById('armedHelp');
+  const setupBtn = document.getElementById('setupBtn');
+  const exitSetupBtn = document.getElementById('exitSetupBtn');
+  const setupBanner = document.getElementById('setupBanner');
 
   let ws;
-  let isDown = false;
-  let pressStart = 0;
-  let lastHoldMs = 250;
+  let setupMode = false;
+  let activeTarget = null;
   let rafId = null;
-  let gauge = 1.0;
-  let lastDeviceElapsed = 0;
+  let pressStart = 0;
+  let lastLocalGaugeTarget = null;
 
-  const MAX_MS = 3000;
+  const buttons = {
+    left: {
+      id: 'left',
+      btn: document.getElementById('leftBtn'),
+      gauge: document.getElementById('leftGauge'),
+      held: document.getElementById('leftHeld'),
+      last: document.getElementById('leftLast'),
+      state: document.getElementById('leftState'),
+      foot: document.getElementById('leftFoot')
+    },
+    both: {
+      id: 'both',
+      btn: document.getElementById('bothBtn'),
+      gauge: document.getElementById('bothGauge'),
+      held: null,
+      last: null,
+      state: document.getElementById('bothState'),
+      foot: document.getElementById('bothFoot')
+    },
+    right: {
+      id: 'right',
+      btn: document.getElementById('rightBtn'),
+      gauge: document.getElementById('rightGauge'),
+      held: document.getElementById('rightHeld'),
+      last: document.getElementById('rightLast'),
+      state: document.getElementById('rightState'),
+      foot: document.getElementById('rightFoot')
+    }
+  };
 
-  function setGauge(value) {
-    gauge = Math.max(0, Math.min(1, value));
-    gaugeFill.style.height = Math.round(gauge * 100) + '%';
+  const nodes = {
+    left: {
+      label: 'Stage Left',
+      connection: 'connecting',
+      heldMs: 0,
+      lastHoldMs: 250,
+      gauge: 1
+    },
+    right: {
+      label: 'Stage Right',
+      connection: 'disconnected',
+      heldMs: 0,
+      lastHoldMs: 0,
+      gauge: 1
+    }
+  };
+
+  function setGauge(id, value) {
+    const entry = buttons[id];
+    if (!entry) return;
+    const clamped = Math.max(0, Math.min(1, value));
+    if (id === 'left' || id === 'right') {
+      nodes[id].gauge = clamped;
+    }
+    entry.gauge.style.height = `${Math.round(clamped * 100)}%`;
   }
 
-  function setStatus(text, color) {
+  function setNodeStatus(id, state, detail) {
+    const entry = buttons[id];
+    if (!entry) return;
+
+    const palette = {
+      ready: COLORS.green,
+      disconnected: COLORS.blue,
+      faulted: COLORS.red,
+      firing: COLORS.orange,
+      connecting: COLORS.neutral,
+      partial: COLORS.fire
+    };
+
+    entry.btn.style.borderColor = `${palette[state] || COLORS.neutral}55`;
+    entry.btn.style.boxShadow = state === 'firing'
+      ? `inset 0 -30px 56px rgba(0, 0, 0, 0.28), 0 0 0 1px ${palette[state]}44`
+      : `inset 0 -22px 40px rgba(0, 0, 0, 0.28)`;
+    entry.btn.style.background =
+      `linear-gradient(180deg, ${palette[state] || COLORS.neutral}30, rgba(255,255,255,0.03)),` +
+      `radial-gradient(circle at 50% 15%, rgba(255, 195, 116, 0.12), transparent 40%),` +
+      `rgba(18, 22, 32, 0.96)`;
+    entry.state.textContent = detail.stateText;
+    entry.foot.textContent = detail.footText;
+  }
+
+  function renderArmed() {
+    const armed = armedToggle.checked && !setupMode;
+    armedLabel.textContent = armed ? 'Armed' : 'Disarmed';
+    armedHelp.textContent = armed
+      ? 'Outgoing poof commands are allowed.'
+      : 'Outgoing poof commands are blocked.';
+
+    Object.values(buttons).forEach(({ btn }) => {
+      btn.classList.toggle('muted', !armed);
+    });
+  }
+
+  function renderMode() {
+    if (setupMode) {
+      modeValue.textContent = 'Setup';
+      modeHelp.textContent = 'Role assignment and conflict handling. Firing is disabled.';
+      setupBanner.classList.add('live');
+    } else {
+      modeValue.textContent = 'Control';
+      modeHelp.textContent = 'Direct fire controls available when armed.';
+      setupBanner.classList.remove('live');
+    }
+  }
+
+  function renderLeftFromBackend(data) {
+    nodes.left.lastHoldMs = data.last_hold_ms || nodes.left.lastHoldMs;
+    nodes.left.heldMs = data.elapsed_ms || 0;
+
+    buttons.left.last.textContent = `${Math.round(nodes.left.lastHoldMs)} ms`;
+    buttons.left.held.textContent = `${Math.round(nodes.left.heldMs)} ms`;
+
+    if (data.error) {
+      nodes.left.connection = 'faulted';
+      setNodeStatus('left', 'faulted', { stateText: 'Faulted', footText: 'Unavailable' });
+      setStatusBanner('Local node faulted', COLORS.red,
+        'Current node reports an error. Right node is still placeholder-only in this UI pass.');
+    } else if (data.connected === false) {
+      nodes.left.connection = 'disconnected';
+      setNodeStatus('left', 'disconnected', { stateText: 'Disconnected', footText: 'Offline' });
+      setStatusBanner('Local node disconnected', COLORS.blue,
+        'No live control websocket. Right node remains placeholder-disconnected.');
+    } else if (data.firing) {
+      nodes.left.connection = 'firing';
+      setNodeStatus('left', 'firing', { stateText: 'Firing', footText: 'Live Hold' });
+      setStatusBanner('Local node firing', COLORS.orange,
+        'Compatibility mode is driving the current node through the old singleton backend.');
+    } else if (data.ready) {
+      nodes.left.connection = 'ready';
+      setNodeStatus('left', 'ready', { stateText: 'Ready', footText: 'Good To Go' });
+      setStatusBanner('Local node ready', COLORS.green,
+        'Left lane is live. Right lane remains placeholder until multi-node protocol work lands.');
+    } else {
+      nodes.left.connection = 'connecting';
+      setNodeStatus('left', 'connecting', { stateText: 'Idle', footText: 'Waiting' });
+      setStatusBanner('Waiting on local node', COLORS.neutral,
+        'The singleton firmware is connected but not yet advertising a fully ready state.');
+    }
+
+    if (!activeTarget) {
+      setGauge('left', 1);
+    }
+  }
+
+  function renderRightPlaceholder() {
+    buttons.right.held.textContent = `${Math.round(nodes.right.heldMs)} ms`;
+    buttons.right.last.textContent = `${Math.round(nodes.right.lastHoldMs)} ms`;
+    setNodeStatus('right', 'disconnected', { stateText: 'Disconnected', footText: 'Offline' });
+    setGauge('right', 1);
+  }
+
+  function renderBothState() {
+    const leftLive = nodes.left.connection === 'ready' || nodes.left.connection === 'firing';
+    const rightLive = nodes.right.connection === 'ready' || nodes.right.connection === 'firing';
+
+    if (leftLive && rightLive) {
+      setNodeStatus('both', 'ready', { stateText: 'Ready', footText: '2 / 2 Live' });
+      document.getElementById('bothFootline').textContent = 'Aligned';
+    } else if (leftLive || rightLive) {
+      setNodeStatus('both', 'partial', { stateText: 'Partial', footText: '1 / 2 Live' });
+      document.getElementById('bothFootline').textContent = 'Best Effort';
+    } else {
+      setNodeStatus('both', 'disconnected', { stateText: 'Offline', footText: '0 / 2 Live' });
+      document.getElementById('bothFootline').textContent = 'Unavailable';
+    }
+
+    const sourceGauge = activeTarget === 'both' ? nodes.left.gauge : ((nodes.left.gauge + nodes.right.gauge) / 2);
+    setGauge('both', sourceGauge);
+  }
+
+  function setStatusBanner(text, color, subtext) {
     statusText.textContent = text;
     statusDot.style.background = color;
+    statusSubtext.textContent = subtext;
   }
 
   function connect() {
@@ -124,76 +891,30 @@
     ws = new WebSocket(`${proto}://${location.host}/ws`);
 
     ws.onopen = () => {
-      setStatus('Ready', '#1db954');
-      ws.send('PING');
+      send('PING');
+      if (nodes.left.connection === 'connecting') {
+        setStatusBanner('Connected to local node', COLORS.green,
+          'Current firmware still exposes a single node. This UI is the v2 console shell over that backend.');
+      }
     };
 
     ws.onclose = () => {
-      setStatus('Disconnected', '#0000ff');
+      nodes.left.connection = 'disconnected';
+      renderLeftFromBackend({ connected: false });
+      renderBothState();
       setTimeout(connect, 1000);
     };
 
     ws.onmessage = (ev) => {
       try {
         const data = JSON.parse(ev.data);
-        lastHoldMs = data.last_hold_ms || lastHoldMs;
-        lastMsEl.textContent = lastHoldMs;
-        lastDeviceElapsed = data.elapsed_ms || 0;
-        heldMsEl.textContent = lastDeviceElapsed;
-
-        if (data.error) {
-          setStatus('Error', '#e63946');
-        } else if (data.connected === false) {
-          setStatus('Disconnected', '#0000ff');
-        } else if (data.firing) {
-          setStatus('Firing', '#ff8a00');
-        } else if (data.ready) {
-          setStatus('Ready', '#1db954');
-        } else {
-          setStatus('Idle', '#7a8aa0');
-        }
-      } catch (e) {
-        // ignore
+        renderLeftFromBackend(data);
+        renderRightPlaceholder();
+        renderBothState();
+      } catch (err) {
+        // Ignore malformed payloads from transitional firmware.
       }
     };
-  }
-
-  function startDrain() {
-    cancelAnimationFrame(rafId);
-    const start = performance.now();
-    const startGauge = gauge;
-
-    const tick = (now) => {
-      if (!isDown) return;
-      const elapsed = now - start;
-      if (elapsed >= MAX_MS) {
-        setGauge(0);
-        heldMsEl.textContent = Math.round(MAX_MS);
-        startRefill(MAX_MS);
-        return;
-      }
-      const next = startGauge - (elapsed / MAX_MS);
-      setGauge(next);
-      heldMsEl.textContent = Math.round(elapsed);
-      rafId = requestAnimationFrame(tick);
-    };
-    rafId = requestAnimationFrame(tick);
-  }
-
-  function startRefill(duration) {
-    cancelAnimationFrame(rafId);
-    const start = performance.now();
-    const from = gauge;
-    const dur = Math.max(10, duration);
-    const tick = (now) => {
-      const elapsed = now - start;
-      const t = Math.min(1, elapsed / dur);
-      setGauge(from + (1 - from) * t);
-      if (t < 1) {
-        rafId = requestAnimationFrame(tick);
-      }
-    };
-    rafId = requestAnimationFrame(tick);
   }
 
   function send(msg) {
@@ -202,36 +923,153 @@
     }
   }
 
-  function handleDown() {
-    if (isDown) return;
-    isDown = true;
-    pressStart = performance.now();
-    fireBtn.classList.add('active');
-    send('DOWN');
-    startDrain();
+  function canFire(target) {
+    if (setupMode || !armedToggle.checked) return false;
+    if (target === 'right') return false;
+    if (target === 'left') {
+      return nodes.left.connection === 'ready' || nodes.left.connection === 'firing';
+    }
+    return nodes.left.connection === 'ready' || nodes.left.connection === 'firing';
   }
 
-  function handleUp() {
-    if (!isDown) return;
-    isDown = false;
-    fireBtn.classList.remove('active');
+  function startDrain(target) {
+    cancelAnimationFrame(rafId);
+    lastLocalGaugeTarget = target;
+    pressStart = performance.now();
+
+    const tick = (now) => {
+      if (activeTarget !== target) return;
+      const elapsed = now - pressStart;
+      const held = Math.min(MAX_MS, elapsed);
+      const remaining = 1 - (held / MAX_MS);
+
+      if (target === 'left' || target === 'both') {
+        nodes.left.heldMs = held;
+        buttons.left.held.textContent = `${Math.round(held)} ms`;
+        setGauge('left', remaining);
+      }
+
+      setGauge('both', remaining);
+
+      if (elapsed >= MAX_MS) {
+        stopFire();
+        return;
+      }
+
+      rafId = requestAnimationFrame(tick);
+    };
+
+    rafId = requestAnimationFrame(tick);
+  }
+
+  function startRefill(target, heldMs) {
+    cancelAnimationFrame(rafId);
+    const from = Math.max(0, Math.min(1, (MAX_MS - heldMs) / MAX_MS));
+    const start = performance.now();
+    const duration = Math.max(heldMs, MIN_MS);
+
+    const tick = (now) => {
+      const elapsed = now - start;
+      const t = Math.min(1, elapsed / duration);
+      const next = from + ((1 - from) * t);
+
+      if (target === 'left' || target === 'both') {
+        setGauge('left', next);
+      }
+      setGauge('both', next);
+
+      if (t < 1) {
+        rafId = requestAnimationFrame(tick);
+      }
+    };
+
+    rafId = requestAnimationFrame(tick);
+  }
+
+  function startFire(target) {
+    if (activeTarget || !canFire(target)) return;
+    activeTarget = target;
+
+    if (target === 'left' || target === 'both') {
+      buttons.left.btn.classList.add('active');
+    }
+    buttons[target].btn.classList.add('active');
+
+    send('DOWN');
+    startDrain(target);
+  }
+
+  function stopFire() {
+    if (!activeTarget) return;
+    const target = activeTarget;
+    activeTarget = null;
+
+    Object.values(buttons).forEach(({ btn }) => btn.classList.remove('active'));
     send('UP');
 
-    const held = performance.now() - pressStart;
-    const clamped = Math.min(MAX_MS, Math.max(250, held));
-    lastHoldMs = clamped;
-    lastMsEl.textContent = Math.round(clamped);
-    startRefill(clamped);
+    const held = Math.min(MAX_MS, Math.max(MIN_MS, performance.now() - pressStart));
+    if (target === 'left' || target === 'both') {
+      nodes.left.lastHoldMs = held;
+      buttons.left.last.textContent = `${Math.round(held)} ms`;
+      nodes.left.heldMs = held;
+      buttons.left.held.textContent = `${Math.round(held)} ms`;
+    }
+
+    startRefill(target, held);
   }
 
-  fireBtn.addEventListener('contextmenu', (e) => e.preventDefault());
-  fireBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); handleDown(); });
-  document.addEventListener('pointerup', (e) => { if (isDown) handleUp(); });
-  document.addEventListener('pointercancel', handleUp);
-  fireBtn.addEventListener('touchstart', (e) => { e.preventDefault(); handleDown(); }, { passive: false });
-  fireBtn.addEventListener('touchend', (e) => { e.preventDefault(); handleUp(); }, { passive: false });
+  function enterSetupMode() {
+    setupMode = true;
+    armedToggle.checked = false;
+    stopFire();
+    renderMode();
+    renderArmed();
+  }
 
-  setGauge(1.0);
+  function exitSetupMode() {
+    setupMode = false;
+    renderMode();
+    renderArmed();
+  }
+
+  buttons.left.btn.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    startFire('left');
+  });
+
+  buttons.both.btn.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    startFire('both');
+  });
+
+  buttons.right.btn.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+  });
+
+  document.addEventListener('pointerup', () => stopFire());
+  document.addEventListener('pointercancel', () => stopFire());
+  document.addEventListener('contextmenu', (event) => event.preventDefault());
+
+  [buttons.left.btn, buttons.both.btn, buttons.right.btn].forEach((btn) => {
+    btn.addEventListener('touchstart', (event) => event.preventDefault(), { passive: false });
+    btn.addEventListener('touchend', (event) => event.preventDefault(), { passive: false });
+  });
+
+  armedToggle.addEventListener('change', () => {
+    if (!armedToggle.checked) {
+      stopFire();
+    }
+    renderArmed();
+  });
+
+  setupBtn.addEventListener('click', () => enterSetupMode());
+  exitSetupBtn.addEventListener('click', () => exitSetupMode());
+
+  renderMode();
+  renderArmed();
+  renderRightPlaceholder();
+  setGauge('left', 1);
+  setGauge('both', 1);
   connect();
   setInterval(() => send('PING'), 1000);
 })();
