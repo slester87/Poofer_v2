@@ -180,18 +180,6 @@ The network model in v2 is explicit:
 
 The final v2 browser UI is a multi-node control console, not the old single-node AP-hosted page.
 
-### UI Screenshots
-
-Ready state:
-
-![Poofer Control UI ready state](EC702A98-FD31-49A0-B811-E277FAC205C0_4_5005_c.jpeg)
-
-Firing state:
-
-![Poofer Control UI firing state](11089010-D734-4728-B3B4-9B94340ECF5F_4_5005_c.jpeg)
-
-These screenshots are from the original single-node system and are retained only as visual lineage, not as a literal representation of the v2 UI.
-
 ## Protocol Summary
 
 The v2 protocol should use explicit session-aware messages rather than the original singleton control shape.
