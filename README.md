@@ -1,8 +1,51 @@
-# Poofer Firmware (ESP32-C3 Super Mini)
+# Poofer_v2
 
 ![CI](https://github.com/slester87/esp32c3supermini_3xWiSeFire1.1_fw/actions/workflows/ci.yml/badge.svg?branch=main)
 
-Firmware and UI for a 3-channel WiSeFire 1.1-driven poofer controller built on an ESP32-C3 Super Mini.
+Firmware and UI for a two-poofer networked control system built from one ESP32-C3 + WiSeFire node per poofer.
+
+The normative v2 implementation target is documented in [DESIGN.md](DESIGN.md).
+
+## V2 Architecture Baseline
+
+- Exactly two poofer nodes are supported in v2.
+- Nodes persist one assigned role locally: `stage-left`, `stage-right`, or `unassigned`.
+- The browser is the single active controller for the show.
+- A dedicated external Wi-Fi network is required. The browser and both nodes join that network as clients.
+- Nodes are discovered over `mDNS`, with manual fallback allowed later if needed.
+- The browser talks directly to each node over websocket connections.
+- The operator UI exposes three fire targets:
+  - `stage-left`
+  - `both`
+  - `stage-right`
+- `both` is one logical command target with best-effort fan-out to both leaf nodes.
+- Safety is hybrid:
+  - local node faults inhibit only that node
+  - a global browser-side `Armed` gate blocks all outgoing fire commands when false
+- Firing remains hold-based:
+  - `DOWN`
+  - `HOLD`
+  - `UP`
+- Missing a poof is acceptable. A stale or unintended poof is not.
+
+## Setup Mode
+
+`Poofer ID Setup` is a dedicated UX for assigning and reassigning `stage-left` and `stage-right`.
+
+These rules are mandatory in setup mode:
+
+- Entering setup mode automatically forces `Armed = false`.
+- Firing controls are disabled while setup mode is active.
+- Role conflict detection automatically redirects into setup mode.
+- Entering setup mode does not preserve a prior armed state.
+- Exiting setup mode does not re-arm the system automatically.
+
+Setup mode is triggered when:
+
+- a node is `unassigned`
+- both discovered nodes claim the same role
+- one of the required roles is missing
+- the operator explicitly chooses `Poofer ID Setup`
 
 ## Quick Start
 
