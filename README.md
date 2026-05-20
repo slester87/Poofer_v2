@@ -3,7 +3,7 @@
 ![Poofer live fire](Assets/Images/blurred_poof.jpg)
 ![Poofer mushroom poof](Assets/Images/mushroom_poof.jpeg)
 
-![CI](https://github.com/slester87/esp32c3supermini_3xWiSeFire1.1_fw/actions/workflows/ci.yml/badge.svg?branch=main)
+![CI](https://github.com/slester87/Poofer_v2/actions/workflows/ci.yml/badge.svg?branch=development)
 
 Firmware and UI for a two-poofer networked control system built from one ESP32-C3 + WiSeFire node per poofer.
 
@@ -58,44 +58,127 @@ Condensed steps:
 
 - Install ESP-IDF 5.5.x and ensure `idf.py` is on your PATH.
 - Optional: copy `.env.example` to `.env` to set defaults like `POOFER_SERIAL_PORT`.
-- Build: `python3 scripts/build.py`
-- Flash: `python3 scripts/flash.py --port /dev/cu.usbmodemXXXX`
-- Monitor: `python3 scripts/monitor.py --port /dev/cu.usbmodemXXXX`
-- Connect to AP `Poofer-AP` and open `http://192.168.4.1/`
+- Build firmware for each poofer node: `python3 scripts/build.py`
+- Flash each node: `python3 scripts/flash.py --port /dev/cu.usbmodemXXXX`
+- Provision both nodes onto the same dedicated external Wi-Fi network
+- Open the browser control console and complete `Poofer ID Setup`
+- Verify one node is `stage-left` and one is `stage-right`
+- Intentionally arm the system before live operation
 
 ## Hardware
 
 - ESP32-C3 Super Mini dev board: https://www.amazon.com/dp/B0D4QK5V74
 - Solenoid: https://www.amazon.com/dp/B00DQ1J4H0
 - Power supply (12V): https://www.amazon.com/dp/B0D9D5L3B5
-- Custom PCB with 3x WiSeFire 1.1 connections
+- One WiSeFire-driven poofer node per effect head
+- Dedicated external Wi-Fi AP/router for the poofer network
 - Full Bill of Materials: `BOM.md`
 
-## Wiring And LED Mapping
+## System Model
 
-GPIO4 drives a 3-pixel WS2812 chain.
+`Poofer_v2` is a two-node system:
 
-- Pixel 0 is a physical on-board LED soldered to the ESP32 board.
-- Pixel 1 is a virtual pixel used for solenoid control via the custom PCB.
-- Pixel 2 is a virtual pixel used as a firing indicator.
-This mapping is intentional and should be preserved. The firmware treats the chain as three pixels.
-Currently, the firmware drives Pixel 1 and Pixel 2 as white (`R=G=B`). On the WiSeFire board, Pixel 1 white
-fires solenoids 1 and 2, and Pixel 2 white fires solenoid 3.
+- one browser control console
+- one `stage-left` poofer node
+- one `stage-right` poofer node
+- one dedicated external Wi-Fi network that all three join as clients
 
-## Architecture
+Each node persists one role locally:
 
-- AP + STA Wi-Fi mode
-- SPIFFS for UI assets
-- HTTP server for UI pages and Wi-Fi form
-- WebSocket control channel
-- NVS storage for STA credentials
-- mDNS hostname `poofer`
+- `stage-left`
+- `stage-right`
+- `unassigned`
+
+The browser discovers nodes over `mDNS`, opens direct websocket sessions to them, and exposes three live fire targets:
+
+- `stage-left`
+- `both`
+- `stage-right`
+
+`both` is one logical operator target with best-effort fan-out to the two nodes.
+
+## Safety Model
+
+The safety model is hybrid:
+
+- each node owns its own local firing and inhibit state
+- the browser owns a global `Armed` gate for outgoing fire commands
+- better to miss a poof than to poof when not intended
+
+Fire control is hold-based:
+
+- `DOWN` starts a fire interaction
+- repeated `HOLD` messages keep it alive
+- `UP` ends it
+
+If command liveness is lost, the node must stop locally.
+
+## Setup And Deployment
+
+Normal live use assumes exactly one valid left/right pairing. If deployment is ambiguous, the system must move into `Poofer ID Setup`.
+
+Setup mode is used for:
+
+- initial role assignment
+- reassignment
+- conflict resolution
+
+Setup mode is triggered when:
+
+- a node is `unassigned`
+- both nodes claim the same role
+- one required role is missing
+- the operator explicitly requests setup
+
+In setup mode:
+
+- `Armed` is forced false
+- firing controls are disabled
+- exiting setup does not automatically re-arm the system
+
+## Operator UI
+
+The live console is intentionally simple:
+
+- one `1x1` button for `stage-left`
+- one `2x1` center button for `both`
+- one `1x1` button for `stage-right`
+- one global `Armed` slider
+- one `Poofer ID Setup` entry point
+
+The control buttons retain the v1-style three-second depletion gauge.
+
+Per-node `last-held` is shown for:
+
+- `stage-left`
+- `stage-right`
+
+`both` does not fabricate an aggregate hold duration.
+
+## Status Colors
+
+Status colors are shared between the browser UI and each node's first WS2812 pixel:
+
+- `green` = ready / good-to-go
+- `blue` = disconnected
+- `red` = connected but unavailable, faulted, or inhibited
+- `orange` = actively firing
+
+When `Armed` is false, buttons should be muted and blurred rather than using a different status color. Color communicates node state; the armed slider communicates whether firing is allowed.
+
+## Networking
+
+The network model in v2 is explicit:
+
+- bring your own dedicated Wi-Fi network
+- do not use a poofer node as the AP host
+- do not use LoRa in v2
+- discover nodes with `mDNS`
+- control nodes with direct browser-to-node websocket sessions
 
 ## Web UI
 
-- Control UI: `http://192.168.4.1/`
-- Wi-Fi setup: `http://192.168.4.1/wifi`
-- mDNS after STA join: `http://poofer.local/`
+The final v2 browser UI is a multi-node control console, not the old single-node AP-hosted page.
 
 ### UI Screenshots
 
@@ -107,36 +190,48 @@ Firing state:
 
 ![Poofer Control UI firing state](11089010-D734-4728-B3B4-9B94340ECF5F_4_5005_c.jpeg)
 
-## WebSocket Protocol
+These screenshots are from the original single-node system and are retained only as visual lineage, not as a literal representation of the v2 UI.
 
-Messages from client to device:
+## Protocol Summary
 
-- `DOWN` starts a press
-- `UP` ends a press
-- `PING` requests a state update
+The v2 protocol should use explicit session-aware messages rather than the original singleton control shape.
 
-State messages from device to client:
+At minimum, the protocol needs:
+
+- session claim / ownership
+- node identity and persisted role
+- fire phases: `DOWN`, `HOLD`, `UP`
+- command IDs and expiry windows
+- per-node status and acknowledgments
+- role assignment requests and responses
+
+Recommended fire-command shape:
 
 ```json
 {
-  "ready": true,
-  "firing": false,
-  "error": false,
-  "connected": true,
-  "elapsed_ms": 0,
-  "last_hold_ms": 250
+  "type": "fire",
+  "phase": "DOWN",
+  "command_id": "cmd-uuid",
+  "controller_id": "browser-uuid",
+  "session_id": "session-uuid",
+  "target": "stage-left",
+  "expires_in_ms": 150,
+  "sent_at_ms": 1234567890
 }
 ```
 
+The normative protocol requirements live in [DESIGN.md](DESIGN.md).
+
 ## Configuration
 
-Defaults are defined in `firmware/main/main.c`.
+The v2 configuration model is:
 
-- AP SSID and password
-- GPIO pin for the LED/solenoid chain
-- Minimum and maximum hold times (0.25s min, 3s max)
-- mDNS hostname and HTTP routes
-- Status LED colors: green = ready, orange = firing, blue = disconnected, red = fault
+- each node persists its role in non-volatile storage
+- each node has a stable hardware identity
+- browser setup flow assigns or reassigns node roles
+- browser remains the single controller in live operation
+
+For implementation details and acceptance criteria, use [DESIGN.md](DESIGN.md).
 
 ## Development
 
@@ -170,7 +265,10 @@ Optional local config is supported via `.env`.
 
 ## Safety
 
-TODO: Add explicit safety guidelines and operational constraints.
+- Better to miss a poof than to poof when not intended.
+- Setup and configuration are always non-firing modes.
+- Browser reload or disconnect must resolve to disarmed or locally stopped behavior.
+- Nodes must reject stale, duplicate, expired, or ownership-ambiguous fire commands.
 
 ## License
 
