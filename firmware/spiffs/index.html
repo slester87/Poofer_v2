@@ -815,6 +815,8 @@
   const nodeList = document.getElementById('nodeList');
 
   let setupMode = false;
+  let setupForced = false;
+  let setupReason = 'Waiting for node roles.';
   let activeTarget = null;
   let activeFireNodes = [];
   let rafId = null;
@@ -910,7 +912,7 @@
   }
 
   function renderArmed() {
-    const armed = armedToggle.checked && !setupMode;
+    const armed = armedToggle.checked && !setupMode && !setupForced;
     armedLabel.textContent = armed ? 'Armed' : 'Disarmed';
     armedHelp.textContent = armed
       ? 'Outgoing poof commands are allowed.'
@@ -922,9 +924,9 @@
   }
 
   function renderMode() {
-    if (setupMode) {
+    if (setupMode || setupForced) {
       modeValue.textContent = 'Setup';
-      modeHelp.textContent = 'Role assignment and conflict handling. Firing is disabled.';
+      modeHelp.textContent = setupReason || 'Role assignment and conflict handling. Firing is disabled.';
       setupBanner.classList.add('live');
       setupPanel.classList.add('live');
     } else {
@@ -952,6 +954,50 @@
 
     const sourceGauge = activeTarget === 'both' ? nodes.left.gauge : ((nodes.left.gauge + nodes.right.gauge) / 2);
     setGauge('both', sourceGauge);
+  }
+
+  function connectedNodes() {
+    return Array.from(connections.values()).filter((conn) => conn.connection !== 'disconnected');
+  }
+
+  function validateDeployment() {
+    const connected = connectedNodes();
+    const left = connected.filter((conn) => conn.role === 'stage-left');
+    const right = connected.filter((conn) => conn.role === 'stage-right');
+    const unassigned = connected.filter((conn) => conn.role === 'unassigned');
+
+    if (connected.length < 2) {
+      return { valid: false, reason: 'Setup needs two connected nodes.' };
+    }
+    if (unassigned.length > 0) {
+      return { valid: false, reason: 'Assign every connected node before live control.' };
+    }
+    if (left.length === 0) {
+      return { valid: false, reason: 'Missing stage-left node.' };
+    }
+    if (right.length === 0) {
+      return { valid: false, reason: 'Missing stage-right node.' };
+    }
+    if (left.length > 1) {
+      return { valid: false, reason: 'Duplicate stage-left role.' };
+    }
+    if (right.length > 1) {
+      return { valid: false, reason: 'Duplicate stage-right role.' };
+    }
+    return { valid: true, reason: 'Deployment roles are valid.' };
+  }
+
+  function applyDeploymentGate() {
+    const result = validateDeployment();
+    setupForced = !result.valid;
+    setupReason = result.reason;
+    if (setupForced && armedToggle.checked) {
+      armedToggle.checked = false;
+      stopFire();
+    }
+    renderMode();
+    renderArmed();
+    return result;
   }
 
   function resetLane(id) {
@@ -1016,12 +1062,15 @@
       }
     });
 
+    const deployment = applyDeploymentGate();
     renderBothState();
 
     const live = assigned.filter((conn) => conn.connection === 'ready' || conn.connection === 'firing');
     const firing = assigned.filter((conn) => conn.connection === 'firing');
     const faulted = assigned.filter((conn) => conn.connection === 'faulted');
-    if (firing.length > 0) {
+    if (!deployment.valid) {
+      setStatusBanner('Setup required', COLORS.red, deployment.reason);
+    } else if (firing.length > 0) {
       setStatusBanner(`${firing.length} node${firing.length === 1 ? '' : 's'} firing`, COLORS.orange,
         'The browser is sending role-local v2 fire commands to active nodes.');
     } else if (faulted.length > 0) {
@@ -1299,7 +1348,7 @@
   }
 
   function canFire(target) {
-    if (setupMode || !armedToggle.checked) return false;
+    if (setupMode || setupForced || !armedToggle.checked) return false;
     return targetConnections(target).length > 0;
   }
 
@@ -1439,6 +1488,11 @@
   }
 
   function exitSetupMode() {
+    if (setupForced) {
+      renderMode();
+      renderArmed();
+      return;
+    }
     setupMode = false;
     renderMode();
     renderArmed();

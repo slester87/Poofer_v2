@@ -131,6 +131,9 @@ Setup mode is triggered when:
 - one required role is missing
 - the operator explicitly requests setup
 
+The browser UI enforces this by forcing setup mode and clearing `Armed` until exactly one connected
+`stage-left` node and exactly one connected `stage-right` node are present.
+
 In setup mode:
 
 - `Armed` is forced false
