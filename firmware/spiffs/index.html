@@ -486,6 +486,95 @@
       display: flex;
     }
 
+    .setup-panel {
+      display: none;
+      gap: 14px;
+      padding: 16px;
+      border-radius: 18px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    .setup-panel.live {
+      display: grid;
+    }
+
+    .setup-form {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+    }
+
+    .setup-input {
+      width: 100%;
+      min-width: 0;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 12px;
+      background: rgba(0, 0, 0, 0.22);
+      color: var(--text);
+      padding: 12px 14px;
+      font: inherit;
+    }
+
+    .node-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .node-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      padding: 12px;
+      border-radius: 14px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(0, 0, 0, 0.16);
+    }
+
+    .node-primary {
+      font-size: 13px;
+      color: #fff3df;
+      overflow-wrap: anywhere;
+    }
+
+    .node-secondary {
+      margin-top: 4px;
+      font-size: 12px;
+      color: var(--muted);
+      overflow-wrap: anywhere;
+    }
+
+    .role-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    .role-button {
+      appearance: none;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text);
+      cursor: pointer;
+      font: inherit;
+      font-size: 12px;
+      padding: 9px 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .role-button.active {
+      border-color: rgba(29, 185, 84, 0.6);
+      background: rgba(29, 185, 84, 0.18);
+    }
+
+    .role-button.danger {
+      border-color: rgba(230, 57, 70, 0.34);
+    }
+
     .footer {
       color: var(--muted);
       font-size: 12px;
@@ -515,6 +604,15 @@
       .mode-pill {
         min-width: 0;
       }
+
+      .setup-form,
+      .node-row {
+        grid-template-columns: 1fr;
+      }
+
+      .role-actions {
+        justify-content: flex-start;
+      }
     }
   </style>
 </head>
@@ -528,8 +626,8 @@
             <h1>Stage Left. Both. Stage Right.</h1>
             <p class="lead">
               Hold-driven fire control for a two-node show. The live layout, color semantics, armed gate,
-              setup mode, and v2 JSON fire protocol are wired through the SPIFFS UI while multi-node
-              discovery and fan-out are still landing.
+              setup mode, v2 JSON fire protocol, and browser-side node registry are wired through the
+              SPIFFS UI while automatic discovery and role setup are still landing.
             </p>
           </div>
           <div class="mode-pill">
@@ -543,10 +641,10 @@
           <div class="status-card">
             <div class="status-line">
               <div class="status-dot" id="statusDot"></div>
-              <div id="statusText">Connecting to local node…</div>
+              <div id="statusText">Connecting to configured nodes…</div>
             </div>
             <div class="status-subline" id="statusSubtext">
-              This pass connects to one node with the v2 JSON websocket protocol. Right stays placeholder-disconnected until browser multi-node discovery lands.
+              Known node origins are loaded from this browser and mapped by their reported role.
             </div>
           </div>
 
@@ -579,6 +677,14 @@
           <span>Armed is forced false and all firing controls are disabled until you leave setup mode.</span>
         </div>
         <button class="setup-button" id="exitSetupBtn" type="button">Return To Control</button>
+      </div>
+
+      <div class="setup-panel" id="setupPanel">
+        <form class="setup-form" id="originForm">
+          <input class="setup-input" id="originInput" type="text" placeholder="http://poofer-stage-left.local" autocomplete="off" />
+          <button class="setup-button" type="submit">Add Node</button>
+        </form>
+        <div class="node-list" id="nodeList"></div>
       </div>
 
       <div class="grid">
@@ -643,14 +749,14 @@
         <div class="lane">
           <div class="lane-header">
             <div class="lane-title">Stage Right</div>
-            <div class="lane-tag" id="rightTag">Placeholder</div>
+            <div class="lane-tag" id="rightTag">Role Node</div>
           </div>
           <button class="fire-button" id="rightBtn" type="button">
             <div class="button-top">
               <div class="button-name">Right</div>
               <div class="button-state" id="rightState">Disconnected</div>
             </div>
-            <div class="button-center">Awaiting Multi-Node Backend</div>
+            <div class="button-center">Hold To Fire</div>
             <div class="gauge-stack">
               <div class="gauge-wrap">
                 <div class="gauge-fill" id="rightGauge"></div>
@@ -672,7 +778,7 @@
 
       <div class="footer">
         <div>Wi-Fi setup: <a href="/wifi">/wifi</a></div>
-        <div>Current bring-up mode: this page controls one claimed node with the v2 JSON websocket protocol.</div>
+        <div>Known node origins are loaded from local browser storage under <code>poofer_v2_node_origins</code>.</div>
       </div>
     </section>
   </div>
@@ -681,12 +787,14 @@
 (() => {
   const MAX_MS = 3000;
   const MIN_MS = 250;
+  const NODE_ORIGINS_KEY = 'poofer_v2_node_origins';
 
   const COLORS = {
     green: '#1db954',
     blue: '#0000ff',
     red: '#e63946',
     orange: '#ff8a00',
+    partial: '#ffb020',
     neutral: '#7a8aa0'
   };
 
@@ -701,17 +809,21 @@
   const setupBtn = document.getElementById('setupBtn');
   const exitSetupBtn = document.getElementById('exitSetupBtn');
   const setupBanner = document.getElementById('setupBanner');
+  const setupPanel = document.getElementById('setupPanel');
+  const originForm = document.getElementById('originForm');
+  const originInput = document.getElementById('originInput');
+  const nodeList = document.getElementById('nodeList');
 
-  let ws;
   let setupMode = false;
   let activeTarget = null;
+  let activeFireNodes = [];
   let rafId = null;
   let holdTimer = null;
   let pressStart = 0;
-  let lastLocalGaugeTarget = null;
   let activeCommandId = '';
   const controllerId = getStableId('poofer_v2_controller_id', 'controller');
   let sessionId = newId('session');
+  const connections = new Map();
 
   const buttons = {
     left: {
@@ -746,17 +858,19 @@
   const nodes = {
     left: {
       label: 'Stage Left',
-      connection: 'connecting',
+      connection: 'disconnected',
       heldMs: 0,
       lastHoldMs: 250,
-      gauge: 1
+      gauge: 1,
+      node: null
     },
     right: {
       label: 'Stage Right',
       connection: 'disconnected',
       heldMs: 0,
       lastHoldMs: 0,
-      gauge: 1
+      gauge: 1,
+      node: null
     }
   };
 
@@ -780,7 +894,7 @@
       faulted: COLORS.red,
       firing: COLORS.orange,
       connecting: COLORS.neutral,
-      partial: COLORS.fire
+      partial: COLORS.partial
     };
 
     entry.btn.style.borderColor = `${palette[state] || COLORS.neutral}55`;
@@ -812,57 +926,13 @@
       modeValue.textContent = 'Setup';
       modeHelp.textContent = 'Role assignment and conflict handling. Firing is disabled.';
       setupBanner.classList.add('live');
+      setupPanel.classList.add('live');
     } else {
       modeValue.textContent = 'Control';
       modeHelp.textContent = 'Direct fire controls available when armed.';
       setupBanner.classList.remove('live');
+      setupPanel.classList.remove('live');
     }
-  }
-
-  function renderLeftFromBackend(data) {
-    nodes.left.lastHoldMs = data.last_hold_ms || nodes.left.lastHoldMs;
-    nodes.left.heldMs = data.elapsed_ms || 0;
-
-    buttons.left.last.textContent = `${Math.round(nodes.left.lastHoldMs)} ms`;
-    buttons.left.held.textContent = `${Math.round(nodes.left.heldMs)} ms`;
-
-    if (data.error) {
-      nodes.left.connection = 'faulted';
-      setNodeStatus('left', 'faulted', { stateText: 'Faulted', footText: 'Unavailable' });
-      setStatusBanner('Local node faulted', COLORS.red,
-        'Current node reports an error. Right node is still placeholder-only in this UI pass.');
-    } else if (data.connected === false) {
-      nodes.left.connection = 'disconnected';
-      setNodeStatus('left', 'disconnected', { stateText: 'Disconnected', footText: 'Offline' });
-      setStatusBanner('Local node disconnected', COLORS.blue,
-        'No live control websocket. Right node remains placeholder-disconnected.');
-    } else if (data.firing) {
-      nodes.left.connection = 'firing';
-      setNodeStatus('left', 'firing', { stateText: 'Firing', footText: 'Live Hold' });
-      setStatusBanner('Local node firing', COLORS.orange,
-        'The claimed node is executing the active v2 fire command.');
-    } else if (data.ready) {
-      nodes.left.connection = 'ready';
-      setNodeStatus('left', 'ready', { stateText: 'Ready', footText: 'Good To Go' });
-      setStatusBanner('Local node ready', COLORS.green,
-        'Left lane is live. Right lane remains placeholder until multi-node protocol work lands.');
-    } else {
-      nodes.left.connection = 'connecting';
-      setNodeStatus('left', 'connecting', { stateText: 'Idle', footText: 'Waiting' });
-      setStatusBanner('Waiting on local node', COLORS.neutral,
-        'The node is connected but not yet advertising a fully ready state.');
-    }
-
-    if (!activeTarget) {
-      setGauge('left', 1);
-    }
-  }
-
-  function renderRightPlaceholder() {
-    buttons.right.held.textContent = `${Math.round(nodes.right.heldMs)} ms`;
-    buttons.right.last.textContent = `${Math.round(nodes.right.lastHoldMs)} ms`;
-    setNodeStatus('right', 'disconnected', { stateText: 'Disconnected', footText: 'Offline' });
-    setGauge('right', 1);
   }
 
   function renderBothState() {
@@ -882,6 +952,92 @@
 
     const sourceGauge = activeTarget === 'both' ? nodes.left.gauge : ((nodes.left.gauge + nodes.right.gauge) / 2);
     setGauge('both', sourceGauge);
+  }
+
+  function resetLane(id) {
+    nodes[id].node = null;
+    nodes[id].connection = 'disconnected';
+    nodes[id].heldMs = 0;
+    nodes[id].lastHoldMs = id === 'left' ? 250 : 0;
+    buttons[id].held.textContent = '0 ms';
+    buttons[id].last.textContent = `${Math.round(nodes[id].lastHoldMs)} ms`;
+    setGauge(id, 1);
+    setNodeStatus(id, 'disconnected', { stateText: 'Disconnected', footText: 'Offline' });
+  }
+
+  function connectionStateFromData(data) {
+    if (data.error || data.faulted) return 'faulted';
+    if (data.connected === false) return 'disconnected';
+    if (data.firing) return 'firing';
+    if (data.ready) return 'ready';
+    return 'connecting';
+  }
+
+  function laneForRole(role) {
+    if (role === 'stage-left') return 'left';
+    if (role === 'stage-right') return 'right';
+    return null;
+  }
+
+  function renderLaneFromConnection(id, conn) {
+    nodes[id].node = conn;
+    nodes[id].connection = conn.connection;
+    nodes[id].heldMs = conn.heldMs;
+    nodes[id].lastHoldMs = conn.lastHoldMs;
+    buttons[id].held.textContent = `${Math.round(conn.heldMs)} ms`;
+    buttons[id].last.textContent = `${Math.round(conn.lastHoldMs)} ms`;
+
+    if (conn.connection === 'faulted') {
+      setNodeStatus(id, 'faulted', { stateText: 'Faulted', footText: 'Unavailable' });
+    } else if (conn.connection === 'firing') {
+      setNodeStatus(id, 'firing', { stateText: 'Firing', footText: 'Live Hold' });
+    } else if (conn.connection === 'ready') {
+      setNodeStatus(id, 'ready', { stateText: 'Ready', footText: conn.shortId });
+    } else if (conn.connection === 'connecting') {
+      setNodeStatus(id, 'connecting', { stateText: 'Connecting', footText: conn.shortId });
+    } else {
+      setNodeStatus(id, 'disconnected', { stateText: 'Disconnected', footText: 'Offline' });
+    }
+
+    if (!activeTarget) {
+      setGauge(id, 1);
+    }
+  }
+
+  function renderAllNodes() {
+    resetLane('left');
+    resetLane('right');
+
+    const assigned = Array.from(connections.values()).filter((conn) => conn.role === 'stage-left' || conn.role === 'stage-right');
+    assigned.forEach((conn) => {
+      const lane = laneForRole(conn.role);
+      if (lane && !nodes[lane].node) {
+        renderLaneFromConnection(lane, conn);
+      }
+    });
+
+    renderBothState();
+
+    const live = assigned.filter((conn) => conn.connection === 'ready' || conn.connection === 'firing');
+    const firing = assigned.filter((conn) => conn.connection === 'firing');
+    const faulted = assigned.filter((conn) => conn.connection === 'faulted');
+    if (firing.length > 0) {
+      setStatusBanner(`${firing.length} node${firing.length === 1 ? '' : 's'} firing`, COLORS.orange,
+        'The browser is sending role-local v2 fire commands to active nodes.');
+    } else if (faulted.length > 0) {
+      setStatusBanner(`${faulted.length} node${faulted.length === 1 ? '' : 's'} faulted`, COLORS.red,
+        'Faulted nodes are not eligible for fire commands.');
+    } else if (live.length > 0) {
+      setStatusBanner(`${live.length} / 2 role node${live.length === 1 ? '' : 's'} ready`, COLORS.green,
+        'Known node origins are connected by role. Add more origins during setup as needed.');
+    } else if (connections.size > 0) {
+      setStatusBanner('Waiting on role nodes', COLORS.neutral,
+        'Connected nodes must report stage-left or stage-right before they can be fired.');
+    } else {
+      setStatusBanner('No nodes configured', COLORS.blue,
+        'This browser needs at least one node origin before it can connect.');
+    }
+    renderSetupNodes();
   }
 
   function setStatusBanner(text, color, subtext) {
@@ -907,89 +1063,257 @@
 
   function protocolTarget(target) {
     if (target === 'right') return 'stage-right';
-    if (target === 'both') return 'both';
     return 'stage-left';
   }
 
-  function sendJson(payload) {
-    send(JSON.stringify(payload));
+  function normalizeOrigin(value) {
+    try {
+      const withProtocol = value.includes('://') ? value : `${location.protocol}//${value}`;
+      const url = new URL(withProtocol);
+      if (url.protocol === 'ws:') url.protocol = 'http:';
+      if (url.protocol === 'wss:') url.protocol = 'https:';
+      return url.origin;
+    } catch (err) {
+      return null;
+    }
   }
 
-  function claimSession() {
-    sendJson({
+  function loadNodeOrigins() {
+    const origins = new Set([location.origin]);
+    try {
+      const saved = JSON.parse(localStorage.getItem(NODE_ORIGINS_KEY) || '[]');
+      if (Array.isArray(saved)) {
+        saved.forEach((entry) => {
+          const origin = normalizeOrigin(String(entry));
+          if (origin) origins.add(origin);
+        });
+      }
+    } catch (err) {
+      // Ignore malformed local node configuration.
+    }
+    return Array.from(origins);
+  }
+
+  function saveNodeOrigins() {
+    const saved = Array.from(connections.keys()).filter((origin) => origin !== location.origin);
+    localStorage.setItem(NODE_ORIGINS_KEY, JSON.stringify(saved));
+  }
+
+  function addNodeOrigin(value) {
+    const origin = normalizeOrigin(value);
+    if (!origin) {
+      setStatusBanner('Invalid node origin', COLORS.red, 'Enter a hostname or full http:// URL.');
+      return;
+    }
+    if (!connections.has(origin)) {
+      connections.set(origin, {
+        origin,
+        ws: null,
+        reconnectTimer: null,
+        hardwareId: '',
+        shortId: origin.replace(/^https?:\/\//, ''),
+        role: 'unassigned',
+        connection: 'connecting',
+        heldMs: 0,
+        lastHoldMs: 250,
+        gauge: 1
+      });
+      saveNodeOrigins();
+    }
+    connectNode(origin);
+    renderAllNodes();
+  }
+
+  function removeNodeOrigin(origin) {
+    const conn = connections.get(origin);
+    if (!conn || origin === location.origin) return;
+    clearTimeout(conn.reconnectTimer);
+    if (conn.ws) {
+      conn.ws.onclose = null;
+      conn.ws.close();
+    }
+    connections.delete(origin);
+    saveNodeOrigins();
+    renderAllNodes();
+  }
+
+  function sendJson(conn, payload) {
+    if (conn.ws && conn.ws.readyState === WebSocket.OPEN) {
+      conn.ws.send(JSON.stringify(payload));
+    }
+  }
+
+  function claimSession(conn) {
+    sendJson(conn, {
       type: 'claim',
       controller_id: controllerId,
       session_id: sessionId
     });
   }
 
-  function sendFire(phase, target, commandId) {
-    sendJson({
+  function sendFire(conn, phase, commandId) {
+    sendJson(conn, {
       type: 'fire',
       phase,
       command_id: commandId,
       controller_id: controllerId,
       session_id: sessionId,
-      target: protocolTarget(target),
+      target: conn.role,
       expires_in_ms: 500,
       sent_at_ms: Math.round(performance.now())
     });
   }
 
-  function connect() {
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    ws = new WebSocket(`${proto}://${location.host}/ws`);
+  function connectNode(origin) {
+    const existing = connections.get(origin);
+    if (existing && existing.ws && existing.ws.readyState <= WebSocket.OPEN) return;
 
-    ws.onopen = () => {
-      claimSession();
-      sendJson({ type: 'ping' });
-      if (nodes.left.connection === 'connecting') {
-        setStatusBanner('Connected to local node', COLORS.green,
-          'Session claim sent. This UI is using the v2 JSON websocket protocol.');
-      }
+    const conn = existing || {
+      origin,
+      ws: null,
+      reconnectTimer: null,
+      hardwareId: '',
+      shortId: origin.replace(/^https?:\/\//, ''),
+      role: 'unassigned',
+      connection: 'connecting',
+      heldMs: 0,
+      lastHoldMs: 250,
+      gauge: 1
+    };
+    connections.set(origin, conn);
+
+    const url = new URL(origin);
+    const proto = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    conn.ws = new WebSocket(`${proto}//${url.host}/ws`);
+
+    conn.ws.onopen = () => {
+      conn.connection = 'connecting';
+      claimSession(conn);
+      sendJson(conn, { type: 'ping' });
+      renderAllNodes();
     };
 
-    ws.onclose = () => {
-      nodes.left.connection = 'disconnected';
-      renderLeftFromBackend({ connected: false });
-      renderBothState();
-      setTimeout(connect, 1000);
+    conn.ws.onclose = () => {
+      conn.connection = 'disconnected';
+      conn.ws = null;
+      renderAllNodes();
+      clearTimeout(conn.reconnectTimer);
+      conn.reconnectTimer = setTimeout(() => connectNode(origin), 1000);
     };
 
-    ws.onmessage = (ev) => {
+    conn.ws.onmessage = (ev) => {
       try {
         const data = JSON.parse(ev.data);
         if (data.type === 'ack') {
           return;
         }
-        renderLeftFromBackend(data);
-        renderRightPlaceholder();
-        renderBothState();
+        if (data.type !== 'state') {
+          return;
+        }
+        conn.hardwareId = data.hardware_id || conn.hardwareId;
+        conn.shortId = conn.hardwareId ? conn.hardwareId.slice(-6) : conn.shortId;
+        conn.role = data.role || 'unassigned';
+        conn.connection = connectionStateFromData(data);
+        conn.heldMs = data.elapsed_ms || 0;
+        conn.lastHoldMs = data.last_hold_ms || conn.lastHoldMs;
+        renderAllNodes();
       } catch (err) {
         // Ignore malformed payloads on the control socket.
       }
     };
   }
 
-  function send(msg) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(msg);
+  function connectAllNodes() {
+    loadNodeOrigins().forEach((origin) => connectNode(origin));
+  }
+
+  function roleLabel(role) {
+    if (role === 'stage-left') return 'Stage Left';
+    if (role === 'stage-right') return 'Stage Right';
+    return 'Unassigned';
+  }
+
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, (ch) => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;'
+    }[ch]));
+  }
+
+  function renderSetupNodes() {
+    if (!nodeList) return;
+    const entries = Array.from(connections.values()).sort((a, b) => a.origin.localeCompare(b.origin));
+    if (entries.length === 0) {
+      nodeList.innerHTML = '<div class="node-secondary">No node origins configured.</div>';
+      return;
+    }
+
+    nodeList.innerHTML = entries.map((conn) => {
+      const removable = conn.origin !== location.origin;
+      const origin = escapeHtml(conn.origin);
+      const shortId = escapeHtml(conn.shortId || conn.origin);
+      const hardwareId = escapeHtml(conn.hardwareId || 'hardware id pending');
+      const role = escapeHtml(roleLabel(conn.role));
+      const state = escapeHtml(conn.connection);
+      return `
+        <div class="node-row" data-origin="${origin}">
+          <div>
+            <div class="node-primary">${shortId}</div>
+            <div class="node-secondary">${origin} · ${role} · ${state}</div>
+            <div class="node-secondary">${hardwareId}</div>
+          </div>
+          <div class="role-actions">
+            <button class="role-button ${conn.role === 'stage-left' ? 'active' : ''}" type="button" data-action="role" data-role="stage-left">Left</button>
+            <button class="role-button ${conn.role === 'stage-right' ? 'active' : ''}" type="button" data-action="role" data-role="stage-right">Right</button>
+            <button class="role-button ${conn.role === 'unassigned' ? 'active' : ''}" type="button" data-action="role" data-role="unassigned">Unassigned</button>
+            <button class="role-button danger" type="button" data-action="remove" ${removable ? '' : 'disabled'}>Remove</button>
+          </div>
+        </div>`;
+    }).join('');
+  }
+
+  async function assignRole(origin, role) {
+    const conn = connections.get(origin);
+    if (!conn) return;
+    try {
+      const body = new URLSearchParams({ role });
+      const response = await fetch(`${origin}/api/role`, {
+        method: 'POST',
+        body
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const data = await response.json();
+      conn.role = data.role || role;
+      conn.connection = connectionStateFromData(data);
+      sendJson(conn, { type: 'ping' });
+      renderAllNodes();
+    } catch (err) {
+      setStatusBanner('Role assignment failed', COLORS.red,
+        `${conn.shortId || origin}: ${err.message || 'request failed'}`);
     }
   }
 
   function canFire(target) {
     if (setupMode || !armedToggle.checked) return false;
-    if (target === 'both') return false;
-    if (target === 'right') return false;
-    if (target === 'left') {
-      return nodes.left.connection === 'ready' || nodes.left.connection === 'firing';
-    }
-    return false;
+    return targetConnections(target).length > 0;
+  }
+
+  function targetConnections(target) {
+    const roles = target === 'both'
+      ? ['stage-left', 'stage-right']
+      : [protocolTarget(target)];
+    return roles
+      .map((role) => Array.from(connections.values()).find((conn) => conn.role === role))
+      .filter((conn) => conn && (conn.connection === 'ready' || conn.connection === 'firing'));
   }
 
   function startDrain(target) {
     cancelAnimationFrame(rafId);
-    lastLocalGaugeTarget = target;
     pressStart = performance.now();
 
     const tick = (now) => {
@@ -998,10 +1322,15 @@
       const held = Math.min(MAX_MS, elapsed);
       const remaining = 1 - (held / MAX_MS);
 
-      if (target === 'left' || target === 'both') {
+      if ((target === 'left' || target === 'both') && nodes.left.node) {
         nodes.left.heldMs = held;
         buttons.left.held.textContent = `${Math.round(held)} ms`;
         setGauge('left', remaining);
+      }
+      if ((target === 'right' || target === 'both') && nodes.right.node) {
+        nodes.right.heldMs = held;
+        buttons.right.held.textContent = `${Math.round(held)} ms`;
+        setGauge('right', remaining);
       }
 
       setGauge('both', remaining);
@@ -1031,6 +1360,9 @@
       if (target === 'left' || target === 'both') {
         setGauge('left', next);
       }
+      if (target === 'right' || target === 'both') {
+        setGauge('right', next);
+      }
       setGauge('both', next);
 
       if (t < 1) {
@@ -1043,19 +1375,25 @@
 
   function startFire(target) {
     if (activeTarget || !canFire(target)) return;
+    activeFireNodes = targetConnections(target);
+    if (activeFireNodes.length === 0) return;
+
     activeTarget = target;
     activeCommandId = newId('cmd');
 
     if (target === 'left' || target === 'both') {
       buttons.left.btn.classList.add('active');
     }
+    if (target === 'right' || target === 'both') {
+      buttons.right.btn.classList.add('active');
+    }
     buttons[target].btn.classList.add('active');
 
-    sendFire('DOWN', target, activeCommandId);
+    activeFireNodes.forEach((conn) => sendFire(conn, 'DOWN', activeCommandId));
     clearInterval(holdTimer);
     holdTimer = setInterval(() => {
       if (activeTarget && activeCommandId) {
-        sendFire('HOLD', activeTarget, activeCommandId);
+        activeFireNodes.forEach((conn) => sendFire(conn, 'HOLD', activeCommandId));
       }
     }, 150);
     startDrain(target);
@@ -1065,20 +1403,28 @@
     if (!activeTarget) return;
     const target = activeTarget;
     const commandId = activeCommandId;
+    const fireNodes = activeFireNodes.slice();
     activeTarget = null;
     activeCommandId = '';
+    activeFireNodes = [];
     clearInterval(holdTimer);
     holdTimer = null;
 
     Object.values(buttons).forEach(({ btn }) => btn.classList.remove('active'));
-    sendFire('UP', target, commandId);
+    fireNodes.forEach((conn) => sendFire(conn, 'UP', commandId));
 
     const held = Math.min(MAX_MS, Math.max(MIN_MS, performance.now() - pressStart));
-    if (target === 'left' || target === 'both') {
+    if ((target === 'left' || target === 'both') && nodes.left.node) {
       nodes.left.lastHoldMs = held;
       buttons.left.last.textContent = `${Math.round(held)} ms`;
       nodes.left.heldMs = held;
       buttons.left.held.textContent = `${Math.round(held)} ms`;
+    }
+    if ((target === 'right' || target === 'both') && nodes.right.node) {
+      nodes.right.lastHoldMs = held;
+      buttons.right.last.textContent = `${Math.round(held)} ms`;
+      nodes.right.heldMs = held;
+      buttons.right.held.textContent = `${Math.round(held)} ms`;
     }
 
     startRefill(target, held);
@@ -1130,14 +1476,33 @@
 
   setupBtn.addEventListener('click', () => enterSetupMode());
   exitSetupBtn.addEventListener('click', () => exitSetupMode());
+  originForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    addNodeOrigin(originInput.value.trim());
+    originInput.value = '';
+  });
+  nodeList.addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-action]');
+    if (!button) return;
+    const row = button.closest('.node-row');
+    const origin = row ? row.dataset.origin : '';
+    if (button.dataset.action === 'role') {
+      assignRole(origin, button.dataset.role);
+    } else if (button.dataset.action === 'remove') {
+      removeNodeOrigin(origin);
+    }
+  });
 
   renderMode();
   renderArmed();
-  renderRightPlaceholder();
+  renderAllNodes();
   setGauge('left', 1);
+  setGauge('right', 1);
   setGauge('both', 1);
-  connect();
-  setInterval(() => sendJson({ type: 'ping' }), 1000);
+  connectAllNodes();
+  setInterval(() => {
+    connections.forEach((conn) => sendJson(conn, { type: 'ping' }));
+  }, 1000);
 })();
 </script>
 </body>

@@ -179,7 +179,13 @@ The network model in v2 is explicit:
 
 ## Web UI
 
-The final v2 browser UI is a multi-node control console, not the old single-node AP-hosted page.
+The browser UI is a multi-node control console. It keeps a browser-side registry of known node origins,
+opens one WebSocket per node, maps node state by reported role, and fans out `both` as role-local
+commands to the eligible `stage-left` and `stage-right` nodes.
+
+Automatic mDNS enumeration is not available directly from ordinary browser JavaScript. The setup UI
+therefore provides a node-origin editor, stores additional origins in browser `localStorage` under
+`poofer_v2_node_origins`, and can assign each connected node's persisted role through `/api/role`.
 
 ## Protocol Summary
 
@@ -208,7 +214,7 @@ Fire-command shape:
 }
 ```
 
-The current browser UI uses this protocol against one claimed node. Browser discovery, two-node connection management, and best-effort fan-out are the next implementation layers.
+The current browser UI uses this protocol against every configured node origin and performs best-effort fan-out from the browser.
 Nodes accept fire commands only for their own assigned role (`stage-left` or `stage-right`). The `both` target is a browser-level fan-out concept; it is not sent to a node as a physical output target.
 
 The normative protocol requirements live in [DESIGN.md](DESIGN.md).

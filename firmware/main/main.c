@@ -709,6 +709,7 @@ static esp_err_t index_handler(httpd_req_t* req) {
 
 static esp_err_t send_json(httpd_req_t* req, const char* payload) {
     httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     return httpd_resp_sendstr(req, payload);
 }
 
