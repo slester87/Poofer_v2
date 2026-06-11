@@ -25,6 +25,7 @@
 #include "esp_http_server.h"
 #include "esp_spiffs.h"
 
+#include "cJSON.h"
 #include "driver/gpio.h"
 #include "led_strip.h"
 
@@ -35,6 +36,7 @@
 #define WS_URI "/ws"
 #define MAX_HOLD_MS 3000
 #define MIN_HOLD_MS 250
+#define FIRE_LIVENESS_TIMEOUT_MS 500
 #define SOLENOID_KICK_MS 50
 #define SOLENOID_HOLD_LEVEL 255
 
@@ -72,8 +74,12 @@ typedef struct {
     bool release_pending;
     int64_t press_start_us;
     uint32_t last_hold_ms;
+    int64_t last_fire_rx_us;
     int64_t last_ws_rx_us;
     bool ws_connected;
+    char owner_controller_id[64];
+    char owner_session_id[64];
+    char active_command_id[64];
     uint8_t solenoid_level;
     uint8_t status_r;
     uint8_t status_g;
@@ -91,8 +97,12 @@ static runtime_state_t runtime = {
     .release_pending = false,
     .press_start_us = 0,
     .last_hold_ms = MIN_HOLD_MS,
+    .last_fire_rx_us = 0,
     .last_ws_rx_us = 0,
     .ws_connected = false,
+    .owner_controller_id = {0},
+    .owner_session_id = {0},
+    .active_command_id = {0},
     .solenoid_level = 0,
     .status_r = 0,
     .status_g = 0,
@@ -246,12 +256,62 @@ static uint32_t current_elapsed_ms_locked(void) {
     return (uint32_t)(diff / 1000);
 }
 
-static void send_state_async(void) {
+static bool json_string_copy(const cJSON* root, const char* key, char* out, size_t out_len) {
+    const cJSON* item = cJSON_GetObjectItemCaseSensitive(root, key);
+    if (!cJSON_IsString(item) || !item->valuestring || item->valuestring[0] == '\0' || !out ||
+        out_len == 0) {
+        return false;
+    }
+
+    size_t len = strlen(item->valuestring);
+    if (len >= out_len) {
+        return false;
+    }
+
+    for (size_t i = 0; i < len; i++) {
+        char ch = item->valuestring[i];
+        bool valid = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+                     (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' || ch == ':' || ch == '.';
+        if (!valid) {
+            return false;
+        }
+    }
+
+    memcpy(out, item->valuestring, len + 1);
+    return true;
+}
+
+static void send_ws_text_async(const char* payload) {
     if (!httpd || ws_client_fd < 0) {
         return;
     }
 
-    char payload[512];
+    httpd_ws_frame_t frame = {
+        .final = true,
+        .fragmented = false,
+        .type = HTTPD_WS_TYPE_TEXT,
+        .payload = (uint8_t*)payload,
+        .len = strlen(payload),
+    };
+    httpd_ws_send_frame_async(httpd, ws_client_fd, &frame);
+}
+
+static void send_ack_async(bool ok, const char* message, const char* command_id,
+                           const char* phase) {
+    char payload[256];
+    int len = snprintf(payload, sizeof(payload),
+                       "{\"type\":\"ack\",\"ok\":%s,\"message\":\"%s\","
+                       "\"command_id\":\"%s\",\"phase\":\"%s\"}",
+                       ok ? "true" : "false", message ? message : "", command_id ? command_id : "",
+                       phase ? phase : "");
+    if (len <= 0 || len >= (int)sizeof(payload)) {
+        return;
+    }
+    send_ws_text_async(payload);
+}
+
+static void send_state_async(void) {
+    char payload[768];
     bool ready = false;
     bool firing = false;
     bool faulted = false;
@@ -262,57 +322,64 @@ static void send_state_async(void) {
     uint32_t last_hold = 0;
     const char* reason = "boot";
     const char* role = "unassigned";
+    char controller_id[64] = {0};
+    char session_id[64] = {0};
+    char command_id[64] = {0};
 
     if (xSemaphoreTake(state_lock, pdMS_TO_TICKS(50)) == pdTRUE) {
         ready = (runtime.state == STATE_READY || runtime.state == STATE_FIRING);
         firing = (runtime.state == STATE_FIRING);
         faulted = (runtime.state == STATE_ERROR || runtime.state == STATE_UNASSIGNED);
         connected = runtime.ws_connected;
-        owned = runtime.ws_connected;
+        owned = runtime.ws_connected && runtime.owner_session_id[0] != '\0';
         setup_needed = !node_role_is_assigned_locked();
         elapsed = current_elapsed_ms_locked();
         last_hold = runtime.last_hold_ms;
         reason = state_reason_locked();
         role = role_to_string(runtime.role);
+        strncpy(controller_id, runtime.owner_controller_id, sizeof(controller_id) - 1);
+        strncpy(session_id, runtime.owner_session_id, sizeof(session_id) - 1);
+        strncpy(command_id, runtime.active_command_id, sizeof(command_id) - 1);
         xSemaphoreGive(state_lock);
     }
 
-    int len = snprintf(payload, sizeof(payload),
-                       "{\"hardware_id\":\"%s\",\"role\":\"%s\",\"owned\":%s,"
-                       "\"ready\":%s,\"firing\":%s,\"faulted\":%s,\"error\":%s,"
-                       "\"connected\":%s,\"setup_needed\":%s,\"reason\":\"%s\","
-                       "\"elapsed_ms\":%" PRIu32 ",\"last_hold_ms\":%" PRIu32 "}",
-                       hardware_id, role, owned ? "true" : "false", ready ? "true" : "false",
-                       firing ? "true" : "false", faulted ? "true" : "false",
-                       faulted ? "true" : "false", connected ? "true" : "false",
-                       setup_needed ? "true" : "false", reason, elapsed, last_hold);
+    int len =
+        snprintf(payload, sizeof(payload),
+                 "{\"type\":\"state\",\"hardware_id\":\"%s\",\"role\":\"%s\","
+                 "\"controller_id\":\"%s\",\"session_id\":\"%s\","
+                 "\"active_command_id\":\"%s\",\"owned\":%s,"
+                 "\"ready\":%s,\"firing\":%s,\"faulted\":%s,\"error\":%s,"
+                 "\"connected\":%s,\"setup_needed\":%s,\"reason\":\"%s\","
+                 "\"elapsed_ms\":%" PRIu32 ",\"last_hold_ms\":%" PRIu32 "}",
+                 hardware_id, role, controller_id, session_id, command_id, owned ? "true" : "false",
+                 ready ? "true" : "false", firing ? "true" : "false", faulted ? "true" : "false",
+                 faulted ? "true" : "false", connected ? "true" : "false",
+                 setup_needed ? "true" : "false", reason, elapsed, last_hold);
     if (len <= 0 || len >= (int)sizeof(payload)) {
         return;
     }
 
-    httpd_ws_frame_t frame = {
-        .final = true,
-        .fragmented = false,
-        .type = HTTPD_WS_TYPE_TEXT,
-        .payload = (uint8_t*)payload,
-        .len = (size_t)len,
-    };
-    httpd_ws_send_frame_async(httpd, ws_client_fd, &frame);
+    send_ws_text_async(payload);
 }
 
 static void stop_firing_locked(system_state_t next_state) {
     runtime.press_active = false;
     runtime.release_pending = false;
+    runtime.active_command_id[0] = '\0';
+    runtime.last_fire_rx_us = 0;
     runtime.state = next_state;
     set_solenoid_level_locked(0);
     reconcile_state_locked();
     update_status_led_locked();
 }
 
-static void start_firing_locked(void) {
+static void start_firing_locked(const char* command_id) {
     runtime.press_active = true;
     runtime.release_pending = false;
     runtime.press_start_us = esp_timer_get_time();
+    runtime.last_fire_rx_us = runtime.press_start_us;
+    strncpy(runtime.active_command_id, command_id, sizeof(runtime.active_command_id) - 1);
+    runtime.active_command_id[sizeof(runtime.active_command_id) - 1] = '\0';
     reconcile_state_locked();
     update_status_led_locked();
     set_solenoid_level_locked(255);
@@ -328,6 +395,8 @@ static void max_hold_timer_cb(void* arg) {
         runtime.last_hold_ms = MAX_HOLD_MS;
         runtime.press_active = false;
         runtime.press_ignore_until_release = true;
+        runtime.active_command_id[0] = '\0';
+        runtime.last_fire_rx_us = 0;
         reconcile_state_locked();
         set_solenoid_level_locked(0);
         update_status_led_locked();
@@ -364,18 +433,54 @@ static void solenoid_kick_timer_cb(void* arg) {
     xSemaphoreGive(state_lock);
 }
 
-static void handle_press_down(void) {
+static bool session_matches_locked(const char* controller_id, const char* session_id) {
+    return controller_id && session_id && strcmp(runtime.owner_controller_id, controller_id) == 0 &&
+           strcmp(runtime.owner_session_id, session_id) == 0;
+}
+
+static bool target_matches_role_locked(const char* target) {
+    return target && strcmp(target, role_to_string(runtime.role)) == 0;
+}
+
+static bool handle_claim(const char* controller_id, const char* session_id) {
+    bool accepted = false;
     if (xSemaphoreTake(state_lock, pdMS_TO_TICKS(50)) != pdTRUE) {
-        return;
+        return false;
     }
 
-    if (runtime.state == STATE_ERROR || runtime.state == STATE_UNASSIGNED || runtime.press_active ||
-        runtime.press_ignore_until_release) {
+    bool same_owner = session_matches_locked(controller_id, session_id);
+    bool no_owner = runtime.owner_session_id[0] == '\0' || !runtime.ws_connected;
+    if (!runtime.press_active && (same_owner || no_owner)) {
+        strncpy(runtime.owner_controller_id, controller_id,
+                sizeof(runtime.owner_controller_id) - 1);
+        runtime.owner_controller_id[sizeof(runtime.owner_controller_id) - 1] = '\0';
+        strncpy(runtime.owner_session_id, session_id, sizeof(runtime.owner_session_id) - 1);
+        runtime.owner_session_id[sizeof(runtime.owner_session_id) - 1] = '\0';
+        runtime.ws_connected = true;
+        runtime.last_ws_rx_us = esp_timer_get_time();
+        reconcile_state_locked();
+        update_status_led_locked();
+        accepted = true;
+    }
+
+    xSemaphoreGive(state_lock);
+    return accepted;
+}
+
+static bool handle_press_down(const char* controller_id, const char* session_id,
+                              const char* command_id, const char* target) {
+    if (xSemaphoreTake(state_lock, pdMS_TO_TICKS(50)) != pdTRUE) {
+        return false;
+    }
+
+    if (!session_matches_locked(controller_id, session_id) || !target_matches_role_locked(target) ||
+        runtime.state == STATE_ERROR || runtime.state == STATE_UNASSIGNED || runtime.press_active ||
+        runtime.press_ignore_until_release || !command_id || command_id[0] == '\0') {
         xSemaphoreGive(state_lock);
-        return;
+        return false;
     }
 
-    start_firing_locked();
+    start_firing_locked(command_id);
 
     esp_timer_stop(max_hold_timer);
     esp_timer_start_once(max_hold_timer, (uint64_t)MAX_HOLD_MS * 1000ULL);
@@ -385,11 +490,29 @@ static void handle_press_down(void) {
 
     xSemaphoreGive(state_lock);
     send_state_async();
+    return true;
 }
 
-static void handle_press_up(void) {
+static bool handle_press_hold(const char* controller_id, const char* session_id,
+                              const char* command_id) {
     if (xSemaphoreTake(state_lock, pdMS_TO_TICKS(50)) != pdTRUE) {
-        return;
+        return false;
+    }
+
+    bool ok = runtime.press_active && session_matches_locked(controller_id, session_id) &&
+              command_id && strcmp(runtime.active_command_id, command_id) == 0;
+    if (ok) {
+        runtime.last_fire_rx_us = esp_timer_get_time();
+    }
+
+    xSemaphoreGive(state_lock);
+    return ok;
+}
+
+static bool handle_press_up(const char* controller_id, const char* session_id,
+                            const char* command_id) {
+    if (xSemaphoreTake(state_lock, pdMS_TO_TICKS(50)) != pdTRUE) {
+        return false;
     }
 
     if (runtime.press_ignore_until_release) {
@@ -398,7 +521,13 @@ static void handle_press_up(void) {
 
     if (!runtime.press_active) {
         xSemaphoreGive(state_lock);
-        return;
+        return true;
+    }
+
+    if (!session_matches_locked(controller_id, session_id) || !command_id ||
+        strcmp(runtime.active_command_id, command_id) != 0) {
+        xSemaphoreGive(state_lock);
+        return false;
     }
 
     int64_t now = esp_timer_get_time();
@@ -415,7 +544,7 @@ static void handle_press_up(void) {
         esp_timer_start_once(min_hold_timer, (uint64_t)(MIN_HOLD_MS - held_ms) * 1000ULL);
         xSemaphoreGive(state_lock);
         send_state_async();
-        return;
+        return true;
     }
 
     stop_firing_locked(STATE_READY);
@@ -425,6 +554,7 @@ static void handle_press_up(void) {
 
     xSemaphoreGive(state_lock);
     send_state_async();
+    return true;
 }
 
 static void handle_ws_message(const char* msg) {
@@ -441,13 +571,60 @@ static void handle_ws_message(const char* msg) {
         xSemaphoreGive(state_lock);
     }
 
-    if (strcmp(msg, "DOWN") == 0) {
-        handle_press_down();
-    } else if (strcmp(msg, "UP") == 0) {
-        handle_press_up();
-    } else if (strcmp(msg, "PING") == 0) {
-        send_state_async();
+    cJSON* root = cJSON_Parse(msg);
+    if (!root) {
+        send_ack_async(false, "invalid_json", NULL, NULL);
+        return;
     }
+
+    char type[24] = {0};
+    char controller_id[64] = {0};
+    char session_id[64] = {0};
+    char command_id[64] = {0};
+    char phase[12] = {0};
+    char target[24] = {0};
+
+    bool ok = json_string_copy(root, "type", type, sizeof(type));
+    if (ok && strcmp(type, "ping") == 0) {
+        send_state_async();
+        cJSON_Delete(root);
+        return;
+    }
+
+    if (!ok || !json_string_copy(root, "controller_id", controller_id, sizeof(controller_id)) ||
+        !json_string_copy(root, "session_id", session_id, sizeof(session_id))) {
+        send_ack_async(false, "missing_identity", NULL, NULL);
+        cJSON_Delete(root);
+        return;
+    }
+
+    if (strcmp(type, "claim") == 0) {
+        bool accepted = handle_claim(controller_id, session_id);
+        send_ack_async(accepted, accepted ? "claimed" : "claim_rejected", NULL, NULL);
+        send_state_async();
+    } else if (strcmp(type, "fire") == 0) {
+        ok = json_string_copy(root, "phase", phase, sizeof(phase)) &&
+             json_string_copy(root, "command_id", command_id, sizeof(command_id)) &&
+             json_string_copy(root, "target", target, sizeof(target));
+        if (!ok) {
+            send_ack_async(false, "missing_fire_fields", command_id, phase);
+        } else if (strcmp(phase, "DOWN") == 0) {
+            ok = handle_press_down(controller_id, session_id, command_id, target);
+            send_ack_async(ok, ok ? "fire_down" : "fire_down_rejected", command_id, phase);
+        } else if (strcmp(phase, "HOLD") == 0) {
+            ok = handle_press_hold(controller_id, session_id, command_id);
+            send_ack_async(ok, ok ? "fire_hold" : "fire_hold_rejected", command_id, phase);
+        } else if (strcmp(phase, "UP") == 0) {
+            ok = handle_press_up(controller_id, session_id, command_id);
+            send_ack_async(ok, ok ? "fire_up" : "fire_up_rejected", command_id, phase);
+        } else {
+            send_ack_async(false, "unknown_phase", command_id, phase);
+        }
+    } else {
+        send_ack_async(false, "unknown_type", NULL, NULL);
+    }
+
+    cJSON_Delete(root);
 }
 
 static esp_err_t ws_handler(httpd_req_t* req) {
@@ -951,10 +1128,19 @@ static void status_task(void* arg) {
             int64_t now = esp_timer_get_time();
             if (runtime.press_active) {
                 int64_t elapsed = now - runtime.press_start_us;
-                if (elapsed >= (int64_t)MAX_HOLD_MS * 1000LL) {
+                int64_t since_fire_rx = now - runtime.last_fire_rx_us;
+                if (runtime.last_fire_rx_us != 0 &&
+                    since_fire_rx > (int64_t)FIRE_LIVENESS_TIMEOUT_MS * 1000LL) {
+                    runtime.last_hold_ms = clamp_hold_ms((uint32_t)(elapsed / 1000));
+                    stop_firing_locked(STATE_READY);
+                    should_stop = true;
+                } else if (elapsed >= (int64_t)MAX_HOLD_MS * 1000LL) {
                     runtime.last_hold_ms = MAX_HOLD_MS;
                     runtime.press_active = false;
                     runtime.press_ignore_until_release = true;
+                    runtime.active_command_id[0] = '\0';
+                    runtime.last_fire_rx_us = 0;
+                    set_solenoid_level_locked(0);
                     reconcile_state_locked();
                     update_status_led_locked();
                     should_send = true;
@@ -965,6 +1151,8 @@ static void status_task(void* arg) {
                 if ((now - runtime.last_ws_rx_us) > 2000000) {
                     stop_firing_locked(STATE_DISCONNECTED);
                     runtime.ws_connected = false;
+                    runtime.owner_controller_id[0] = '\0';
+                    runtime.owner_session_id[0] = '\0';
                     reconcile_state_locked();
                     should_stop = true;
                 }
@@ -972,6 +1160,8 @@ static void status_task(void* arg) {
             if (runtime.ws_connected && runtime.last_ws_rx_us != 0 &&
                 (now - runtime.last_ws_rx_us) > 2000000) {
                 runtime.ws_connected = false;
+                runtime.owner_controller_id[0] = '\0';
+                runtime.owner_session_id[0] = '\0';
                 reconcile_state_locked();
                 update_status_led_locked();
                 should_send = true;

@@ -183,18 +183,17 @@ The final v2 browser UI is a multi-node control console, not the old single-node
 
 ## Protocol Summary
 
-The v2 protocol should use explicit session-aware messages rather than the original singleton control shape.
+The node WebSocket protocol is JSON-only in v2. Legacy singleton text commands such as `DOWN`, `UP`, and `PING` are not accepted by this firmware.
 
-At minimum, the protocol needs:
+Implemented message families:
 
-- session claim / ownership
-- node identity and persisted role
-- fire phases: `DOWN`, `HOLD`, `UP`
-- command IDs and expiry windows
-- per-node status and acknowledgments
-- role assignment requests and responses
+- `claim` establishes the browser controller/session for one node.
+- `fire` sends `DOWN`, repeated `HOLD`, and `UP` phases with a `command_id`.
+- `ping` requests a status refresh.
+- `ack` reports per-command acceptance or rejection.
+- `state` publishes node identity, role, ownership, readiness, firing state, and hold timing.
 
-Recommended fire-command shape:
+Fire-command shape:
 
 ```json
 {
@@ -204,10 +203,13 @@ Recommended fire-command shape:
   "controller_id": "browser-uuid",
   "session_id": "session-uuid",
   "target": "stage-left",
-  "expires_in_ms": 150,
+  "expires_in_ms": 500,
   "sent_at_ms": 1234567890
 }
 ```
+
+The current browser UI uses this protocol against one claimed node. Browser discovery, two-node connection management, and best-effort fan-out are the next implementation layers.
+Nodes accept fire commands only for their own assigned role (`stage-left` or `stage-right`). The `both` target is a browser-level fan-out concept; it is not sent to a node as a physical output target.
 
 The normative protocol requirements live in [DESIGN.md](DESIGN.md).
 

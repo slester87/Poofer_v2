@@ -527,9 +527,9 @@
             <div class="eyebrow">Poofer_v2 Live Console</div>
             <h1>Stage Left. Both. Stage Right.</h1>
             <p class="lead">
-              Hold-driven fire control for a two-node show. In this first front-end pass the live layout,
-              color semantics, armed gate, and setup mode are wired through the SPIFFS UI while the backend
-              still exposes the original single-node status model.
+              Hold-driven fire control for a two-node show. The live layout, color semantics, armed gate,
+              setup mode, and v2 JSON fire protocol are wired through the SPIFFS UI while multi-node
+              discovery and fan-out are still landing.
             </p>
           </div>
           <div class="mode-pill">
@@ -546,7 +546,7 @@
               <div id="statusText">Connecting to local node…</div>
             </div>
             <div class="status-subline" id="statusSubtext">
-              Current firmware still reports one node. The left lane is hydrated from live backend state; right stays placeholder-disconnected until the multi-node protocol lands.
+              This pass connects to one node with the v2 JSON websocket protocol. Right stays placeholder-disconnected until browser multi-node discovery lands.
             </div>
           </div>
 
@@ -672,7 +672,7 @@
 
       <div class="footer">
         <div>Wi-Fi setup: <a href="/wifi">/wifi</a></div>
-        <div>Current compatibility mode: local websocket still uses the original singleton `DOWN` / `UP` / `PING` backend.</div>
+        <div>Current bring-up mode: this page controls one claimed node with the v2 JSON websocket protocol.</div>
       </div>
     </section>
   </div>
@@ -706,8 +706,12 @@
   let setupMode = false;
   let activeTarget = null;
   let rafId = null;
+  let holdTimer = null;
   let pressStart = 0;
   let lastLocalGaugeTarget = null;
+  let activeCommandId = '';
+  const controllerId = getStableId('poofer_v2_controller_id', 'controller');
+  let sessionId = newId('session');
 
   const buttons = {
     left: {
@@ -836,7 +840,7 @@
       nodes.left.connection = 'firing';
       setNodeStatus('left', 'firing', { stateText: 'Firing', footText: 'Live Hold' });
       setStatusBanner('Local node firing', COLORS.orange,
-        'Compatibility mode is driving the current node through the old singleton backend.');
+        'The claimed node is executing the active v2 fire command.');
     } else if (data.ready) {
       nodes.left.connection = 'ready';
       setNodeStatus('left', 'ready', { stateText: 'Ready', footText: 'Good To Go' });
@@ -846,7 +850,7 @@
       nodes.left.connection = 'connecting';
       setNodeStatus('left', 'connecting', { stateText: 'Idle', footText: 'Waiting' });
       setStatusBanner('Waiting on local node', COLORS.neutral,
-        'The singleton firmware is connected but not yet advertising a fully ready state.');
+        'The node is connected but not yet advertising a fully ready state.');
     }
 
     if (!activeTarget) {
@@ -886,15 +890,62 @@
     statusSubtext.textContent = subtext;
   }
 
+  function newId(prefix) {
+    if (window.crypto && window.crypto.randomUUID) {
+      return `${prefix}:${window.crypto.randomUUID()}`;
+    }
+    return `${prefix}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2)}`;
+  }
+
+  function getStableId(key, prefix) {
+    const existing = localStorage.getItem(key);
+    if (existing) return existing;
+    const value = newId(prefix);
+    localStorage.setItem(key, value);
+    return value;
+  }
+
+  function protocolTarget(target) {
+    if (target === 'right') return 'stage-right';
+    if (target === 'both') return 'both';
+    return 'stage-left';
+  }
+
+  function sendJson(payload) {
+    send(JSON.stringify(payload));
+  }
+
+  function claimSession() {
+    sendJson({
+      type: 'claim',
+      controller_id: controllerId,
+      session_id: sessionId
+    });
+  }
+
+  function sendFire(phase, target, commandId) {
+    sendJson({
+      type: 'fire',
+      phase,
+      command_id: commandId,
+      controller_id: controllerId,
+      session_id: sessionId,
+      target: protocolTarget(target),
+      expires_in_ms: 500,
+      sent_at_ms: Math.round(performance.now())
+    });
+  }
+
   function connect() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     ws = new WebSocket(`${proto}://${location.host}/ws`);
 
     ws.onopen = () => {
-      send('PING');
+      claimSession();
+      sendJson({ type: 'ping' });
       if (nodes.left.connection === 'connecting') {
         setStatusBanner('Connected to local node', COLORS.green,
-          'Current firmware still exposes a single node. This UI is the v2 console shell over that backend.');
+          'Session claim sent. This UI is using the v2 JSON websocket protocol.');
       }
     };
 
@@ -908,11 +959,14 @@
     ws.onmessage = (ev) => {
       try {
         const data = JSON.parse(ev.data);
+        if (data.type === 'ack') {
+          return;
+        }
         renderLeftFromBackend(data);
         renderRightPlaceholder();
         renderBothState();
       } catch (err) {
-        // Ignore malformed payloads from transitional firmware.
+        // Ignore malformed payloads on the control socket.
       }
     };
   }
@@ -925,11 +979,12 @@
 
   function canFire(target) {
     if (setupMode || !armedToggle.checked) return false;
+    if (target === 'both') return false;
     if (target === 'right') return false;
     if (target === 'left') {
       return nodes.left.connection === 'ready' || nodes.left.connection === 'firing';
     }
-    return nodes.left.connection === 'ready' || nodes.left.connection === 'firing';
+    return false;
   }
 
   function startDrain(target) {
@@ -989,23 +1044,34 @@
   function startFire(target) {
     if (activeTarget || !canFire(target)) return;
     activeTarget = target;
+    activeCommandId = newId('cmd');
 
     if (target === 'left' || target === 'both') {
       buttons.left.btn.classList.add('active');
     }
     buttons[target].btn.classList.add('active');
 
-    send('DOWN');
+    sendFire('DOWN', target, activeCommandId);
+    clearInterval(holdTimer);
+    holdTimer = setInterval(() => {
+      if (activeTarget && activeCommandId) {
+        sendFire('HOLD', activeTarget, activeCommandId);
+      }
+    }, 150);
     startDrain(target);
   }
 
   function stopFire() {
     if (!activeTarget) return;
     const target = activeTarget;
+    const commandId = activeCommandId;
     activeTarget = null;
+    activeCommandId = '';
+    clearInterval(holdTimer);
+    holdTimer = null;
 
     Object.values(buttons).forEach(({ btn }) => btn.classList.remove('active'));
-    send('UP');
+    sendFire('UP', target, commandId);
 
     const held = Math.min(MAX_MS, Math.max(MIN_MS, performance.now() - pressStart));
     if (target === 'left' || target === 'both') {
@@ -1071,7 +1137,7 @@
   setGauge('left', 1);
   setGauge('both', 1);
   connect();
-  setInterval(() => send('PING'), 1000);
+  setInterval(() => sendJson({ type: 'ping' }), 1000);
 })();
 </script>
 </body>
