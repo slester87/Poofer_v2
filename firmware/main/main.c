@@ -542,11 +542,11 @@ static esp_err_t node_info_get_handler(httpd_req_t* req) {
         return ESP_FAIL;
     }
 
-    int len = snprintf(
-        payload, sizeof(payload),
-        "{\"hardware_id\":\"%s\",\"role\":\"%s\",\"state\":\"%s\",\"setup_needed\":%s}",
-        hardware_id, role_to_string(runtime.role), state_reason_locked(),
-        node_role_is_assigned_locked() ? "false" : "true");
+    int len =
+        snprintf(payload, sizeof(payload),
+                 "{\"hardware_id\":\"%s\",\"role\":\"%s\",\"state\":\"%s\",\"setup_needed\":%s}",
+                 hardware_id, role_to_string(runtime.role), state_reason_locked(),
+                 node_role_is_assigned_locked() ? "false" : "true");
     xSemaphoreGive(state_lock);
 
     if (len <= 0 || len >= (int)sizeof(payload)) {
