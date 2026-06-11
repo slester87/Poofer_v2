@@ -13,6 +13,7 @@
 
 #include "esp_event.h"
 #include "esp_log.h"
+#include "esp_mac.h"
 #include "esp_netif.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -44,17 +45,28 @@
 #define GPIO_NEOPIXEL GPIO_NUM_4
 
 #define TAG "poofer"
+#define ROLE_NAMESPACE "node"
+#define ROLE_KEY "role"
+#define DEFAULT_MDNS_SERVICE "_poofer"
 
 typedef enum {
     STATE_BOOT = 0,
     STATE_READY,
     STATE_FIRING,
     STATE_DISCONNECTED,
+    STATE_UNASSIGNED,
     STATE_ERROR,
 } system_state_t;
 
+typedef enum {
+    ROLE_UNASSIGNED = 0,
+    ROLE_STAGE_LEFT,
+    ROLE_STAGE_RIGHT,
+} node_role_t;
+
 typedef struct {
     system_state_t state;
+    node_role_t role;
     bool press_active;
     bool press_ignore_until_release;
     bool release_pending;
@@ -73,6 +85,7 @@ static httpd_handle_t httpd = NULL;
 static int ws_client_fd = -1;
 static runtime_state_t runtime = {
     .state = STATE_BOOT,
+    .role = ROLE_UNASSIGNED,
     .press_active = false,
     .press_ignore_until_release = false,
     .release_pending = false,
@@ -89,6 +102,76 @@ static SemaphoreHandle_t state_lock;
 static esp_timer_handle_t max_hold_timer;
 static esp_timer_handle_t min_hold_timer;
 static esp_timer_handle_t solenoid_kick_timer;
+static char hardware_id[32] = {0};
+static char mdns_hostname[32] = {0};
+
+static void parse_form_value(const char* body, const char* key, char* out, size_t out_len);
+
+static const char* role_to_string(node_role_t role) {
+    switch (role) {
+    case ROLE_STAGE_LEFT:
+        return "stage-left";
+    case ROLE_STAGE_RIGHT:
+        return "stage-right";
+    case ROLE_UNASSIGNED:
+    default:
+        return "unassigned";
+    }
+}
+
+static node_role_t role_from_string(const char* role) {
+    if (!role) {
+        return ROLE_UNASSIGNED;
+    }
+    if (strcmp(role, "stage-left") == 0) {
+        return ROLE_STAGE_LEFT;
+    }
+    if (strcmp(role, "stage-right") == 0) {
+        return ROLE_STAGE_RIGHT;
+    }
+    return ROLE_UNASSIGNED;
+}
+
+static const char* state_reason_locked(void) {
+    switch (runtime.state) {
+    case STATE_BOOT:
+        return "boot";
+    case STATE_READY:
+        return "ready";
+    case STATE_FIRING:
+        return "firing";
+    case STATE_DISCONNECTED:
+        return "disconnected";
+    case STATE_UNASSIGNED:
+        return "unassigned";
+    case STATE_ERROR:
+    default:
+        return "faulted";
+    }
+}
+
+static bool node_role_is_assigned_locked(void) {
+    return runtime.role == ROLE_STAGE_LEFT || runtime.role == ROLE_STAGE_RIGHT;
+}
+
+static void reconcile_state_locked(void) {
+    if (!node_role_is_assigned_locked()) {
+        runtime.state = STATE_UNASSIGNED;
+        return;
+    }
+
+    if (runtime.press_active) {
+        runtime.state = STATE_FIRING;
+        return;
+    }
+
+    if (runtime.ws_connected) {
+        runtime.state = STATE_READY;
+        return;
+    }
+
+    runtime.state = STATE_DISCONNECTED;
+}
 
 static void refresh_pixels_locked(void) {
     if (!strip) {
@@ -130,6 +213,7 @@ static void update_status_led_locked(void) {
         runtime.status_g = 0;
         runtime.status_b = 255; // disconnected blue (#0000ff)
         break;
+    case STATE_UNASSIGNED:
     case STATE_ERROR:
     default:
         runtime.status_r = 230;
@@ -167,29 +251,41 @@ static void send_state_async(void) {
         return;
     }
 
-    char payload[192];
+    char payload[512];
     bool ready = false;
     bool firing = false;
-    bool error = false;
+    bool faulted = false;
     bool connected = false;
+    bool owned = false;
+    bool setup_needed = false;
     uint32_t elapsed = 0;
     uint32_t last_hold = 0;
+    const char* reason = "boot";
+    const char* role = "unassigned";
 
     if (xSemaphoreTake(state_lock, pdMS_TO_TICKS(50)) == pdTRUE) {
         ready = (runtime.state == STATE_READY || runtime.state == STATE_FIRING);
         firing = (runtime.state == STATE_FIRING);
-        error = (runtime.state == STATE_ERROR);
+        faulted = (runtime.state == STATE_ERROR || runtime.state == STATE_UNASSIGNED);
         connected = runtime.ws_connected;
+        owned = runtime.ws_connected;
+        setup_needed = !node_role_is_assigned_locked();
         elapsed = current_elapsed_ms_locked();
         last_hold = runtime.last_hold_ms;
+        reason = state_reason_locked();
+        role = role_to_string(runtime.role);
         xSemaphoreGive(state_lock);
     }
 
     int len = snprintf(payload, sizeof(payload),
-                       "{\"ready\":%s,\"firing\":%s,\"error\":%s,\"connected\":%s,"
+                       "{\"hardware_id\":\"%s\",\"role\":\"%s\",\"owned\":%s,"
+                       "\"ready\":%s,\"firing\":%s,\"faulted\":%s,\"error\":%s,"
+                       "\"connected\":%s,\"setup_needed\":%s,\"reason\":\"%s\","
                        "\"elapsed_ms\":%" PRIu32 ",\"last_hold_ms\":%" PRIu32 "}",
-                       ready ? "true" : "false", firing ? "true" : "false",
-                       error ? "true" : "false", connected ? "true" : "false", elapsed, last_hold);
+                       hardware_id, role, owned ? "true" : "false", ready ? "true" : "false",
+                       firing ? "true" : "false", faulted ? "true" : "false",
+                       faulted ? "true" : "false", connected ? "true" : "false",
+                       setup_needed ? "true" : "false", reason, elapsed, last_hold);
     if (len <= 0 || len >= (int)sizeof(payload)) {
         return;
     }
@@ -209,14 +305,15 @@ static void stop_firing_locked(system_state_t next_state) {
     runtime.release_pending = false;
     runtime.state = next_state;
     set_solenoid_level_locked(0);
+    reconcile_state_locked();
     update_status_led_locked();
 }
 
 static void start_firing_locked(void) {
-    runtime.state = STATE_FIRING;
     runtime.press_active = true;
     runtime.release_pending = false;
     runtime.press_start_us = esp_timer_get_time();
+    reconcile_state_locked();
     update_status_led_locked();
     set_solenoid_level_locked(255);
 }
@@ -231,7 +328,7 @@ static void max_hold_timer_cb(void* arg) {
         runtime.last_hold_ms = MAX_HOLD_MS;
         runtime.press_active = false;
         runtime.press_ignore_until_release = true;
-        runtime.state = STATE_READY;
+        reconcile_state_locked();
         set_solenoid_level_locked(0);
         update_status_led_locked();
     }
@@ -272,7 +369,7 @@ static void handle_press_down(void) {
         return;
     }
 
-    if (runtime.state == STATE_ERROR || runtime.press_active ||
+    if (runtime.state == STATE_ERROR || runtime.state == STATE_UNASSIGNED || runtime.press_active ||
         runtime.press_ignore_until_release) {
         xSemaphoreGive(state_lock);
         return;
@@ -339,10 +436,8 @@ static void handle_ws_message(const char* msg) {
     if (xSemaphoreTake(state_lock, pdMS_TO_TICKS(50)) == pdTRUE) {
         runtime.last_ws_rx_us = now;
         runtime.ws_connected = true;
-        if (runtime.state == STATE_DISCONNECTED) {
-            runtime.state = STATE_READY;
-            update_status_led_locked();
-        }
+        reconcile_state_locked();
+        update_status_led_locked();
         xSemaphoreGive(state_lock);
     }
 
@@ -361,10 +456,8 @@ static esp_err_t ws_handler(httpd_req_t* req) {
         if (xSemaphoreTake(state_lock, pdMS_TO_TICKS(50)) == pdTRUE) {
             runtime.ws_connected = true;
             runtime.last_ws_rx_us = esp_timer_get_time();
-            if (runtime.state == STATE_DISCONNECTED) {
-                runtime.state = STATE_READY;
-                update_status_led_locked();
-            }
+            reconcile_state_locked();
+            update_status_led_locked();
             xSemaphoreGive(state_lock);
         }
         send_state_async();
@@ -435,6 +528,129 @@ static esp_err_t send_file(httpd_req_t* req, const char* path, const char* conte
 
 static esp_err_t index_handler(httpd_req_t* req) {
     return send_file(req, "/spiffs/index.html", "text/html");
+}
+
+static esp_err_t send_json(httpd_req_t* req, const char* payload) {
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, payload);
+}
+
+static esp_err_t node_info_get_handler(httpd_req_t* req) {
+    char payload[384];
+    if (xSemaphoreTake(state_lock, pdMS_TO_TICKS(50)) != pdTRUE) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Lock fail");
+        return ESP_FAIL;
+    }
+
+    int len = snprintf(
+        payload, sizeof(payload),
+        "{\"hardware_id\":\"%s\",\"role\":\"%s\",\"state\":\"%s\",\"setup_needed\":%s}",
+        hardware_id, role_to_string(runtime.role), state_reason_locked(),
+        node_role_is_assigned_locked() ? "false" : "true");
+    xSemaphoreGive(state_lock);
+
+    if (len <= 0 || len >= (int)sizeof(payload)) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Encode fail");
+        return ESP_FAIL;
+    }
+
+    return send_json(req, payload);
+}
+
+static bool role_store(node_role_t role) {
+    nvs_handle_t nvs;
+    if (nvs_open(ROLE_NAMESPACE, NVS_READWRITE, &nvs) != ESP_OK) {
+        return false;
+    }
+
+    esp_err_t err = nvs_set_u8(nvs, ROLE_KEY, (uint8_t)role);
+    if (err == ESP_OK) {
+        err = nvs_commit(nvs);
+    }
+    nvs_close(nvs);
+    return err == ESP_OK;
+}
+
+static void role_load(void) {
+    nvs_handle_t nvs;
+    runtime.role = ROLE_UNASSIGNED;
+
+    if (nvs_open(ROLE_NAMESPACE, NVS_READONLY, &nvs) != ESP_OK) {
+        return;
+    }
+
+    uint8_t role = ROLE_UNASSIGNED;
+    if (nvs_get_u8(nvs, ROLE_KEY, &role) == ESP_OK) {
+        runtime.role = (node_role_t)role;
+    }
+    nvs_close(nvs);
+}
+
+static esp_err_t role_post_handler(httpd_req_t* req) {
+    int total_len = req->content_len;
+    if (total_len <= 0 || total_len > 256) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid content");
+        return ESP_FAIL;
+    }
+
+    char* buf = calloc(1, total_len + 1);
+    if (!buf) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+        return ESP_FAIL;
+    }
+
+    int received = httpd_req_recv(req, buf, total_len);
+    if (received <= 0) {
+        free(buf);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Recv fail");
+        return ESP_FAIL;
+    }
+    buf[received] = '\0';
+
+    char role_buf[32] = {0};
+    parse_form_value(buf, "role", role_buf, sizeof(role_buf));
+    if (role_buf[0] == '\0') {
+        const char* role_pos = strstr(buf, "\"role\"");
+        if (role_pos) {
+            const char* colon = strchr(role_pos, ':');
+            const char* quote = colon ? strchr(colon, '"') : NULL;
+            if (quote) {
+                quote++;
+                const char* end_quote = strchr(quote, '"');
+                if (end_quote) {
+                    size_t len = (size_t)(end_quote - quote);
+                    if (len >= sizeof(role_buf)) {
+                        len = sizeof(role_buf) - 1;
+                    }
+                    memcpy(role_buf, quote, len);
+                    role_buf[len] = '\0';
+                }
+            }
+        }
+    }
+
+    free(buf);
+
+    node_role_t role = role_from_string(role_buf);
+    if (role == ROLE_UNASSIGNED && strcmp(role_buf, "unassigned") != 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid role");
+        return ESP_FAIL;
+    }
+
+    if (!role_store(role)) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Role store failed");
+        return ESP_FAIL;
+    }
+
+    if (xSemaphoreTake(state_lock, pdMS_TO_TICKS(50)) == pdTRUE) {
+        runtime.role = role;
+        reconcile_state_locked();
+        update_status_led_locked();
+        xSemaphoreGive(state_lock);
+    }
+
+    send_state_async();
+    return node_info_get_handler(req);
 }
 
 static esp_err_t wifi_get_handler(httpd_req_t* req) {
@@ -589,11 +805,23 @@ static esp_err_t wifi_post_handler(httpd_req_t* req) {
     return ESP_OK;
 }
 
+static void init_identity(void) {
+    uint8_t mac[6] = {0};
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    snprintf(hardware_id, sizeof(hardware_id), "esp32c3-%02x%02x%02x", mac[3], mac[4], mac[5]);
+    snprintf(mdns_hostname, sizeof(mdns_hostname), "poofer-%02x%02x%02x", mac[3], mac[4], mac[5]);
+}
+
 static void start_mdns(void) {
     mdns_init();
-    mdns_hostname_set("poofer");
-    mdns_instance_name_set("Poofer Controller");
-    mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+    mdns_hostname_set(mdns_hostname);
+    mdns_instance_name_set("Poofer_v2 Node");
+    mdns_txt_item_t txt[] = {
+        {.key = "hardware_id", .value = hardware_id},
+        {.key = "role", .value = role_to_string(runtime.role)},
+    };
+    mdns_service_add(NULL, "_http", "_tcp", 80, txt, 2);
+    mdns_service_add(NULL, DEFAULT_MDNS_SERVICE, "_tcp", 80, txt, 2);
 }
 
 static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id,
@@ -605,10 +833,8 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         start_mdns();
         if (xSemaphoreTake(state_lock, pdMS_TO_TICKS(50)) == pdTRUE) {
-            if (runtime.state == STATE_BOOT) {
-                runtime.state = STATE_DISCONNECTED;
-                update_status_led_locked();
-            }
+            reconcile_state_locked();
+            update_status_led_locked();
             xSemaphoreGive(state_lock);
         }
     }
@@ -678,6 +904,22 @@ static httpd_handle_t start_http_server(void) {
     };
     httpd_register_uri_handler(server, &wifi_post_uri);
 
+    httpd_uri_t node_info_uri = {
+        .uri = "/api/node",
+        .method = HTTP_GET,
+        .handler = node_info_get_handler,
+        .user_ctx = NULL,
+    };
+    httpd_register_uri_handler(server, &node_info_uri);
+
+    httpd_uri_t role_post_uri = {
+        .uri = "/api/role",
+        .method = HTTP_POST,
+        .handler = role_post_handler,
+        .user_ctx = NULL,
+    };
+    httpd_register_uri_handler(server, &role_post_uri);
+
     httpd_uri_t ws_uri = {
         .uri = WS_URI,
         .method = HTTP_GET,
@@ -713,7 +955,7 @@ static void status_task(void* arg) {
                     runtime.last_hold_ms = MAX_HOLD_MS;
                     runtime.press_active = false;
                     runtime.press_ignore_until_release = true;
-                    runtime.state = STATE_READY;
+                    reconcile_state_locked();
                     update_status_led_locked();
                     should_send = true;
                 }
@@ -723,16 +965,15 @@ static void status_task(void* arg) {
                 if ((now - runtime.last_ws_rx_us) > 2000000) {
                     stop_firing_locked(STATE_DISCONNECTED);
                     runtime.ws_connected = false;
+                    reconcile_state_locked();
                     should_stop = true;
                 }
             }
             if (runtime.ws_connected && runtime.last_ws_rx_us != 0 &&
                 (now - runtime.last_ws_rx_us) > 2000000) {
                 runtime.ws_connected = false;
-                if (runtime.state != STATE_ERROR && runtime.state != STATE_FIRING) {
-                    runtime.state = STATE_DISCONNECTED;
-                    update_status_led_locked();
-                }
+                reconcile_state_locked();
+                update_status_led_locked();
                 should_send = true;
             }
             xSemaphoreGive(state_lock);
@@ -766,11 +1007,14 @@ static void init_led_strip(void) {
 
 void app_main(void) {
     nvs_flash_init();
+    init_identity();
 
     state_lock = xSemaphoreCreateMutex();
     if (!state_lock) {
         return;
     }
+
+    role_load();
 
     init_led_strip();
 
@@ -796,7 +1040,7 @@ void app_main(void) {
     wifi_init_ap_sta();
 
     if (xSemaphoreTake(state_lock, pdMS_TO_TICKS(50)) == pdTRUE) {
-        runtime.state = STATE_DISCONNECTED;
+        reconcile_state_locked();
         update_status_led_locked();
         xSemaphoreGive(state_lock);
     }

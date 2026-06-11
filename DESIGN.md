@@ -632,6 +632,7 @@ Recommended build order:
 1. Refactor single-node firmware into a role-aware node firmware with persistent role and updated status model.
 2. Preserve safe local hold-based firing and status LED behavior on each node.
 3. Add direct websocket session ownership and JSON protocol support.
+   Circle back: finish true session ownership semantics and controller claim behavior before treating the distributed control plane as complete.
 4. Add `mDNS` discovery metadata needed for browser setup.
 5. Build browser setup UX for role assignment and conflict handling.
 6. Build live control UI with `Armed` slider and left/both/right buttons.
@@ -658,4 +659,3 @@ The first acceptable v2 implementation satisfies all of the following:
 - A node dropping off the network does not cause an unintended poof.
 - A browser disconnect or missed hold liveness stops any active poof.
 - Browser button colors and node WS2812 status colors remain semantically aligned.
-
