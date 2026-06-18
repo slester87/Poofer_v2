@@ -795,6 +795,7 @@
     red: '#e63946',
     orange: '#ff8a00',
     partial: '#ffb020',
+    owned: '#00a6a6',
     neutral: '#7a8aa0'
   };
 
@@ -895,6 +896,7 @@
       disconnected: COLORS.blue,
       faulted: COLORS.red,
       firing: COLORS.orange,
+      owned: COLORS.owned,
       connecting: COLORS.neutral,
       partial: COLORS.partial
     };
@@ -965,9 +967,13 @@
     const left = connected.filter((conn) => conn.role === 'stage-left');
     const right = connected.filter((conn) => conn.role === 'stage-right');
     const unassigned = connected.filter((conn) => conn.role === 'unassigned');
+    const owned = connected.filter((conn) => conn.connection === 'owned');
 
     if (connected.length < 2) {
       return { valid: false, reason: 'Setup needs two connected nodes.' };
+    }
+    if (owned.length > 0) {
+      return { valid: false, reason: 'A node is owned by another controller.' };
     }
     if (unassigned.length > 0) {
       return { valid: false, reason: 'Assign every connected node before live control.' };
@@ -1014,6 +1020,9 @@
   function connectionStateFromData(data) {
     if (data.error || data.faulted) return 'faulted';
     if (data.connected === false) return 'disconnected';
+    if (data.owned && (data.controller_id !== controllerId || data.session_id !== sessionId)) {
+      return 'owned';
+    }
     if (data.firing) return 'firing';
     if (data.ready) return 'ready';
     return 'connecting';
@@ -1035,6 +1044,8 @@
 
     if (conn.connection === 'faulted') {
       setNodeStatus(id, 'faulted', { stateText: 'Faulted', footText: 'Unavailable' });
+    } else if (conn.connection === 'owned') {
+      setNodeStatus(id, 'owned', { stateText: 'Owned', footText: 'Other Phone' });
     } else if (conn.connection === 'firing') {
       setNodeStatus(id, 'firing', { stateText: 'Firing', footText: 'Live Hold' });
     } else if (conn.connection === 'ready') {
@@ -1068,6 +1079,7 @@
     const live = assigned.filter((conn) => conn.connection === 'ready' || conn.connection === 'firing');
     const firing = assigned.filter((conn) => conn.connection === 'firing');
     const faulted = assigned.filter((conn) => conn.connection === 'faulted');
+    const owned = assigned.filter((conn) => conn.connection === 'owned');
     if (!deployment.valid) {
       setStatusBanner('Setup required', COLORS.red, deployment.reason);
     } else if (firing.length > 0) {
@@ -1076,6 +1088,9 @@
     } else if (faulted.length > 0) {
       setStatusBanner(`${faulted.length} node${faulted.length === 1 ? '' : 's'} faulted`, COLORS.red,
         'Faulted nodes are not eligible for fire commands.');
+    } else if (owned.length > 0) {
+      setStatusBanner(`${owned.length} node${owned.length === 1 ? '' : 's'} owned`, COLORS.owned,
+        'Another browser session has exclusive control of that node.');
     } else if (live.length > 0) {
       setStatusBanner(`${live.length} / 2 role node${live.length === 1 ? '' : 's'} ready`, COLORS.green,
         'Known node origins are connected by role. Add more origins during setup as needed.');
@@ -1163,6 +1178,8 @@
         shortId: origin.replace(/^https?:\/\//, ''),
         role: 'unassigned',
         connection: 'connecting',
+        ownerControllerId: '',
+        ownerSessionId: '',
         heldMs: 0,
         lastHoldMs: 250,
         gauge: 1
@@ -1178,6 +1195,7 @@
     if (!conn || origin === location.origin) return;
     clearTimeout(conn.reconnectTimer);
     if (conn.ws) {
+      releaseSession(conn);
       conn.ws.onclose = null;
       conn.ws.close();
     }
@@ -1198,6 +1216,31 @@
       controller_id: controllerId,
       session_id: sessionId
     });
+  }
+
+  function sendPing(conn) {
+    sendJson(conn, {
+      type: 'ping',
+      controller_id: controllerId,
+      session_id: sessionId
+    });
+  }
+
+  function releaseSession(conn) {
+    sendJson(conn, {
+      type: 'release',
+      controller_id: controllerId,
+      session_id: sessionId
+    });
+  }
+
+  function releaseAllSessions() {
+    connections.forEach((conn) => releaseSession(conn));
+  }
+
+  function stopAndReleaseAllSessions() {
+    stopFire();
+    releaseAllSessions();
   }
 
   function sendFire(conn, phase, commandId) {
@@ -1225,6 +1268,8 @@
       shortId: origin.replace(/^https?:\/\//, ''),
       role: 'unassigned',
       connection: 'connecting',
+      ownerControllerId: '',
+      ownerSessionId: '',
       heldMs: 0,
       lastHoldMs: 250,
       gauge: 1
@@ -1238,7 +1283,7 @@
     conn.ws.onopen = () => {
       conn.connection = 'connecting';
       claimSession(conn);
-      sendJson(conn, { type: 'ping' });
+      sendPing(conn);
       renderAllNodes();
     };
 
@@ -1254,6 +1299,10 @@
       try {
         const data = JSON.parse(ev.data);
         if (data.type === 'ack') {
+          if (data.message === 'claim_rejected') {
+            conn.connection = 'owned';
+            renderAllNodes();
+          }
           return;
         }
         if (data.type !== 'state') {
@@ -1262,6 +1311,8 @@
         conn.hardwareId = data.hardware_id || conn.hardwareId;
         conn.shortId = conn.hardwareId ? conn.hardwareId.slice(-6) : conn.shortId;
         conn.role = data.role || 'unassigned';
+        conn.ownerControllerId = data.controller_id || '';
+        conn.ownerSessionId = data.session_id || '';
         conn.connection = connectionStateFromData(data);
         conn.heldMs = data.elapsed_ms || 0;
         conn.lastHoldMs = data.last_hold_ms || conn.lastHoldMs;
@@ -1307,11 +1358,12 @@
       const hardwareId = escapeHtml(conn.hardwareId || 'hardware id pending');
       const role = escapeHtml(roleLabel(conn.role));
       const state = escapeHtml(conn.connection);
+      const ownership = conn.connection === 'owned' ? ' · owned by another controller' : '';
       return `
         <div class="node-row" data-origin="${origin}">
           <div>
             <div class="node-primary">${shortId}</div>
-            <div class="node-secondary">${origin} · ${role} · ${state}</div>
+            <div class="node-secondary">${origin} · ${role} · ${state}${ownership}</div>
             <div class="node-secondary">${hardwareId}</div>
           </div>
           <div class="role-actions">
@@ -1339,7 +1391,7 @@
       const data = await response.json();
       conn.role = data.role || role;
       conn.connection = connectionStateFromData(data);
-      sendJson(conn, { type: 'ping' });
+      sendPing(conn);
       renderAllNodes();
     } catch (err) {
       setStatusBanner('Role assignment failed', COLORS.red,
@@ -1510,11 +1562,14 @@
 
   buttons.right.btn.addEventListener('pointerdown', (event) => {
     event.preventDefault();
+    startFire('right');
   });
 
   document.addEventListener('pointerup', () => stopFire());
   document.addEventListener('pointercancel', () => stopFire());
   document.addEventListener('contextmenu', (event) => event.preventDefault());
+  window.addEventListener('pagehide', () => stopAndReleaseAllSessions());
+  window.addEventListener('beforeunload', () => stopAndReleaseAllSessions());
 
   [buttons.left.btn, buttons.both.btn, buttons.right.btn].forEach((btn) => {
     btn.addEventListener('touchstart', (event) => event.preventDefault(), { passive: false });
@@ -1555,7 +1610,7 @@
   setGauge('both', 1);
   connectAllNodes();
   setInterval(() => {
-    connections.forEach((conn) => sendJson(conn, { type: 'ping' }));
+    connections.forEach((conn) => sendPing(conn));
   }, 1000);
 })();
 </script>

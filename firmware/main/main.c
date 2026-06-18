@@ -37,6 +37,7 @@
 #define MAX_HOLD_MS 3000
 #define MIN_HOLD_MS 250
 #define FIRE_LIVENESS_TIMEOUT_MS 500
+#define OWNER_SESSION_TIMEOUT_MS 3000
 #define SOLENOID_KICK_MS 50
 #define SOLENOID_HOLD_LEVEL 255
 
@@ -75,6 +76,7 @@ typedef struct {
     int64_t press_start_us;
     uint32_t last_hold_ms;
     int64_t last_fire_rx_us;
+    int64_t last_owner_rx_us;
     int64_t last_ws_rx_us;
     bool ws_connected;
     char owner_controller_id[64];
@@ -98,6 +100,7 @@ static runtime_state_t runtime = {
     .press_start_us = 0,
     .last_hold_ms = MIN_HOLD_MS,
     .last_fire_rx_us = 0,
+    .last_owner_rx_us = 0,
     .last_ws_rx_us = 0,
     .ws_connected = false,
     .owner_controller_id = {0},
@@ -438,6 +441,14 @@ static bool session_matches_locked(const char* controller_id, const char* sessio
            strcmp(runtime.owner_session_id, session_id) == 0;
 }
 
+static void clear_owner_locked(void) {
+    runtime.owner_controller_id[0] = '\0';
+    runtime.owner_session_id[0] = '\0';
+    runtime.last_owner_rx_us = 0;
+}
+
+static void refresh_owner_locked(void) { runtime.last_owner_rx_us = esp_timer_get_time(); }
+
 static bool target_matches_role_locked(const char* target) {
     return target && strcmp(target, role_to_string(runtime.role)) == 0;
 }
@@ -449,7 +460,7 @@ static bool handle_claim(const char* controller_id, const char* session_id) {
     }
 
     bool same_owner = session_matches_locked(controller_id, session_id);
-    bool no_owner = runtime.owner_session_id[0] == '\0' || !runtime.ws_connected;
+    bool no_owner = runtime.owner_session_id[0] == '\0';
     if (!runtime.press_active && (same_owner || no_owner)) {
         strncpy(runtime.owner_controller_id, controller_id,
                 sizeof(runtime.owner_controller_id) - 1);
@@ -458,6 +469,24 @@ static bool handle_claim(const char* controller_id, const char* session_id) {
         runtime.owner_session_id[sizeof(runtime.owner_session_id) - 1] = '\0';
         runtime.ws_connected = true;
         runtime.last_ws_rx_us = esp_timer_get_time();
+        refresh_owner_locked();
+        reconcile_state_locked();
+        update_status_led_locked();
+        accepted = true;
+    }
+
+    xSemaphoreGive(state_lock);
+    return accepted;
+}
+
+static bool handle_release(const char* controller_id, const char* session_id) {
+    bool accepted = false;
+    if (xSemaphoreTake(state_lock, pdMS_TO_TICKS(50)) != pdTRUE) {
+        return false;
+    }
+
+    if (!runtime.press_active && session_matches_locked(controller_id, session_id)) {
+        clear_owner_locked();
         reconcile_state_locked();
         update_status_led_locked();
         accepted = true;
@@ -481,6 +510,7 @@ static bool handle_press_down(const char* controller_id, const char* session_id,
     }
 
     start_firing_locked(command_id);
+    refresh_owner_locked();
 
     esp_timer_stop(max_hold_timer);
     esp_timer_start_once(max_hold_timer, (uint64_t)MAX_HOLD_MS * 1000ULL);
@@ -503,6 +533,7 @@ static bool handle_press_hold(const char* controller_id, const char* session_id,
               command_id && strcmp(runtime.active_command_id, command_id) == 0;
     if (ok) {
         runtime.last_fire_rx_us = esp_timer_get_time();
+        refresh_owner_locked();
     }
 
     xSemaphoreGive(state_lock);
@@ -537,6 +568,7 @@ static bool handle_press_up(const char* controller_id, const char* session_id,
     }
 
     runtime.last_hold_ms = clamp_hold_ms(held_ms);
+    refresh_owner_locked();
 
     if (held_ms < MIN_HOLD_MS) {
         runtime.release_pending = true;
@@ -585,12 +617,6 @@ static void handle_ws_message(const char* msg) {
     char target[24] = {0};
 
     bool ok = json_string_copy(root, "type", type, sizeof(type));
-    if (ok && strcmp(type, "ping") == 0) {
-        send_state_async();
-        cJSON_Delete(root);
-        return;
-    }
-
     if (!ok || !json_string_copy(root, "controller_id", controller_id, sizeof(controller_id)) ||
         !json_string_copy(root, "session_id", session_id, sizeof(session_id))) {
         send_ack_async(false, "missing_identity", NULL, NULL);
@@ -598,9 +624,21 @@ static void handle_ws_message(const char* msg) {
         return;
     }
 
-    if (strcmp(type, "claim") == 0) {
+    if (strcmp(type, "ping") == 0) {
+        if (xSemaphoreTake(state_lock, pdMS_TO_TICKS(50)) == pdTRUE) {
+            if (session_matches_locked(controller_id, session_id)) {
+                refresh_owner_locked();
+            }
+            xSemaphoreGive(state_lock);
+        }
+        send_state_async();
+    } else if (strcmp(type, "claim") == 0) {
         bool accepted = handle_claim(controller_id, session_id);
         send_ack_async(accepted, accepted ? "claimed" : "claim_rejected", NULL, NULL);
+        send_state_async();
+    } else if (strcmp(type, "release") == 0) {
+        bool accepted = handle_release(controller_id, session_id);
+        send_ack_async(accepted, accepted ? "released" : "release_rejected", NULL, NULL);
         send_state_async();
     } else if (strcmp(type, "fire") == 0) {
         ok = json_string_copy(root, "phase", phase, sizeof(phase)) &&
@@ -1152,8 +1190,7 @@ static void status_task(void* arg) {
                 if ((now - runtime.last_ws_rx_us) > 2000000) {
                     stop_firing_locked(STATE_DISCONNECTED);
                     runtime.ws_connected = false;
-                    runtime.owner_controller_id[0] = '\0';
-                    runtime.owner_session_id[0] = '\0';
+                    clear_owner_locked();
                     reconcile_state_locked();
                     should_stop = true;
                 }
@@ -1161,8 +1198,18 @@ static void status_task(void* arg) {
             if (runtime.ws_connected && runtime.last_ws_rx_us != 0 &&
                 (now - runtime.last_ws_rx_us) > 2000000) {
                 runtime.ws_connected = false;
-                runtime.owner_controller_id[0] = '\0';
-                runtime.owner_session_id[0] = '\0';
+                clear_owner_locked();
+                reconcile_state_locked();
+                update_status_led_locked();
+                should_send = true;
+            }
+            if (runtime.owner_session_id[0] != '\0' && runtime.last_owner_rx_us != 0 &&
+                (now - runtime.last_owner_rx_us) > (int64_t)OWNER_SESSION_TIMEOUT_MS * 1000LL) {
+                if (runtime.press_active) {
+                    stop_firing_locked(runtime.ws_connected ? STATE_READY : STATE_DISCONNECTED);
+                    should_stop = true;
+                }
+                clear_owner_locked();
                 reconcile_state_locked();
                 update_status_led_locked();
                 should_send = true;

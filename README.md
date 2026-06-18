@@ -198,9 +198,14 @@ Implemented message families:
 
 - `claim` establishes the browser controller/session for one node.
 - `fire` sends `DOWN`, repeated `HOLD`, and `UP` phases with a `command_id`.
-- `ping` requests a status refresh.
+- `ping` requests a status refresh and renews ownership for the active session.
+- `release` clears ownership for an idle session.
 - `ack` reports per-command acceptance or rejection.
 - `state` publishes node identity, role, ownership, readiness, firing state, and hold timing.
+
+Each node allows only one browser session to own it at a time. A claimed node rejects claims from other
+controller/session pairs until the current owner releases it, the WebSocket disconnects, or the owner
+lease expires. Fire commands are accepted only from the active owner.
 
 Fire-command shape:
 
